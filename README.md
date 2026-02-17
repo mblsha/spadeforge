@@ -11,7 +11,8 @@ Minimal remote Vivado build service for Spade bundles.
 
 ## Layout
 
-- `cmd/spadeforge`: CLI (`server` and `submit` subcommands)
+- `cmd/spadeforge`: server binary
+- `cmd/spadeforge-cli`: client submission binary
 - `internal/server`: HTTP API
 - `internal/queue`: persistent queue manager + worker lifecycle
 - `internal/builder`: `FakeBuilder` and `VivadoBuilder`
@@ -46,13 +47,13 @@ Minimal remote Vivado build service for Spade bundles.
 Run server:
 
 ```bash
-SPADEFORGE_BASE_DIR=/tmp/spadeforge SPADEFORGE_USE_FAKE_BUILDER=1 spadeforge server
+SPADEFORGE_BASE_DIR=/tmp/spadeforge SPADEFORGE_USE_FAKE_BUILDER=1 spadeforge
 ```
 
 Submit from Linux side:
 
 ```bash
-spadeforge submit \
+spadeforge-cli \
   --server http://127.0.0.1:8080 \
   --top top \
   --part xc7a35tcsg324-1 \
