@@ -8,9 +8,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mblsha/spadeforge/internal/config"
+	"github.com/mblsha/spadeforge/internal/job"
 	"github.com/mblsha/spadeforge/internal/queue"
 )
 
@@ -36,6 +39,9 @@ func (a *API) routes() {
 	a.mux.Handle("GET /v1/jobs/{id}", a.guard(http.HandlerFunc(a.handleGetJob)))
 	a.mux.Handle("GET /v1/jobs/{id}/artifacts", a.guard(http.HandlerFunc(a.handleGetArtifacts)))
 	a.mux.Handle("GET /v1/jobs/{id}/log", a.guard(http.HandlerFunc(a.handleGetLog)))
+	a.mux.Handle("GET /v1/jobs/{id}/tail", a.guard(http.HandlerFunc(a.handleGetTail)))
+	a.mux.Handle("GET /v1/jobs/{id}/diagnostics", a.guard(http.HandlerFunc(a.handleGetDiagnostics)))
+	a.mux.Handle("GET /v1/jobs/{id}/events", a.guard(http.HandlerFunc(a.handleGetEvents)))
 }
 
 func (a *API) guard(next http.Handler) http.Handler {
@@ -154,6 +160,124 @@ func (a *API) handleGetLog(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(raw)
+}
+
+func (a *API) handleGetTail(w http.ResponseWriter, r *http.Request) {
+	jobID := r.PathValue("id")
+	if _, ok := a.manager.Get(jobID); !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "job not found"})
+		return
+	}
+	lines := 200
+	if rawLines := strings.TrimSpace(r.URL.Query().Get("lines")); rawLines != "" {
+		n, err := strconv.Atoi(rawLines)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid lines query value"})
+			return
+		}
+		lines = n
+	}
+	raw, err := a.manager.ReadConsoleTail(jobID, lines)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(raw)
+}
+
+func (a *API) handleGetDiagnostics(w http.ResponseWriter, r *http.Request) {
+	jobID := r.PathValue("id")
+	if _, ok := a.manager.Get(jobID); !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "job not found"})
+		return
+	}
+	raw, err := a.manager.ReadDiagnostics(jobID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(raw)
+}
+
+func (a *API) handleGetEvents(w http.ResponseWriter, r *http.Request) {
+	jobID := r.PathValue("id")
+	since := int64(0)
+	if rawSince := strings.TrimSpace(r.URL.Query().Get("since")); rawSince != "" {
+		n, err := strconv.ParseInt(rawSince, 10, 64)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid since query value"})
+			return
+		}
+		since = n
+	}
+
+	backlog, ch, cancel, ok := a.manager.SubscribeEvents(jobID, since)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "job not found"})
+		return
+	}
+	defer cancel()
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming unsupported"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	for _, ev := range backlog {
+		if err := writeSSEEvent(w, ev); err != nil {
+			return
+		}
+		flusher.Flush()
+	}
+	if ch == nil {
+		return
+	}
+
+	keepalive := time.NewTicker(15 * time.Second)
+	defer keepalive.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-keepalive.C:
+			_, _ = w.Write([]byte(": keepalive\n\n"))
+			flusher.Flush()
+		case ev, ok := <-ch:
+			if !ok {
+				return
+			}
+			if err := writeSSEEvent(w, ev); err != nil {
+				return
+			}
+			flusher.Flush()
+			if ev.Terminal() {
+				return
+			}
+		}
+	}
+}
+
+func writeSSEEvent(w http.ResponseWriter, ev job.Event) error {
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.Seq, ev.Type, string(raw)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

@@ -122,6 +122,12 @@ func TestWorker_UpdatesStatesCorrectly_OnSuccess(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(st.ArtifactsJobDir(rec.ID), "design.bit")); err != nil {
 		t.Fatalf("expected bitstream: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(st.ArtifactsJobDir(rec.ID), "diagnostics.json")); err != nil {
+		t.Fatalf("expected diagnostics.json: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(st.ArtifactsJobDir(rec.ID), "artifact_manifest.json")); err != nil {
+		t.Fatalf("expected artifact_manifest.json: %v", err)
+	}
 }
 
 func TestWorker_UpdatesStatesCorrectly_OnFailure(t *testing.T) {
@@ -149,6 +155,12 @@ func TestWorker_UpdatesStatesCorrectly_OnFailure(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(st.ArtifactsJobDir(rec.ID), "console.log")); err != nil {
 		t.Fatalf("expected logs on failure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(st.ArtifactsJobDir(rec.ID), "diagnostics.json")); err != nil {
+		t.Fatalf("expected diagnostics on failure: %v", err)
+	}
+	if final.FailureKind == "" || final.FailureSummary == "" {
+		t.Fatalf("expected failure metadata, got %+v", final)
 	}
 }
 
@@ -256,6 +268,42 @@ func TestWorker_PreserveWorkDirOption(t *testing.T) {
 	waitForTerminalState(t, mgr, rec.ID)
 	if _, err := os.Stat(st.WorkJobDir(rec.ID)); err != nil {
 		t.Fatalf("expected preserved work dir, got %v", err)
+	}
+}
+
+func TestEvents_SubscribeProvidesBacklog(t *testing.T) {
+	cfg := testConfig(t)
+	st := store.New(cfg)
+	mgr := New(cfg, st, &builder.FakeBuilder{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, err := mgr.Submit(context.Background(), bytes.NewReader(validBundleBytes(t, "ok")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForTerminalState(t, mgr, rec.ID)
+
+	events, ch, release, ok := mgr.SubscribeEvents(rec.ID, 0)
+	if !ok {
+		t.Fatalf("expected subscribe ok")
+	}
+	defer release()
+	if ch != nil {
+		t.Fatalf("expected nil live channel for terminal job")
+	}
+	if len(events) < 2 {
+		t.Fatalf("expected backlog events, got %d", len(events))
+	}
+	if events[0].Type != "queued" {
+		t.Fatalf("expected first event queued, got %q", events[0].Type)
+	}
+	if !events[len(events)-1].Terminal() {
+		t.Fatalf("expected last event terminal, got %+v", events[len(events)-1])
 	}
 }
 

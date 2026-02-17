@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +54,12 @@ func TestSubmitJob_SucceedsAndArtifactsDownload(t *testing.T) {
 	if !files["console.log"] {
 		t.Fatalf("expected console.log in artifacts: %v", files)
 	}
+	if !files["diagnostics.json"] {
+		t.Fatalf("expected diagnostics.json in artifacts: %v", files)
+	}
+	if !files["artifact_manifest.json"] {
+		t.Fatalf("expected artifact_manifest.json in artifacts: %v", files)
+	}
 
 	// Ensure status endpoint matches manager state too.
 	inMem, ok := mgr.Get(jobID)
@@ -79,6 +86,15 @@ func TestSubmitJob_FailureIncludesLogsOnly(t *testing.T) {
 	}
 	if !files["console.log"] {
 		t.Fatalf("expected console.log on failure")
+	}
+	if !files["diagnostics.json"] {
+		t.Fatalf("expected diagnostics.json on failure")
+	}
+	if !files["artifact_manifest.json"] {
+		t.Fatalf("expected artifact_manifest.json on failure")
+	}
+	if rec.FailureKind == "" || rec.FailureSummary == "" {
+		t.Fatalf("expected failure metadata, got %+v", rec)
 	}
 }
 
@@ -146,6 +162,102 @@ func TestJobStatus_ExposesStepAndHeartbeat(t *testing.T) {
 
 	close(block)
 	waitForJobTerminalHTTP(t, ts.URL, cfg, jobID)
+}
+
+func TestDiagnosticsEndpoint_ReturnsParsedErrors(t *testing.T) {
+	fb := &builder.FakeBuilder{FailProjects: map[string]error{"fail": errors.New("forced")}}
+	ts, cfg, _, cancel := newTestServer(t, fb)
+	defer cancel()
+
+	jobID := submitBundle(t, ts.URL, cfg, validBundleBytes(t, "fail"))
+	waitForJobTerminalHTTP(t, ts.URL, cfg, jobID)
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/jobs/"+jobID+"/diagnostics", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(cfg.AuthHeader, cfg.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("diagnostics failed: %d body=%s", resp.StatusCode, string(raw))
+	}
+	var report job.DiagnosticsReport
+	if err := json.NewDecoder(resp.Body).Decode(&report); err != nil {
+		t.Fatal(err)
+	}
+	if report.ErrorCount == 0 || len(report.Diagnostics) == 0 {
+		t.Fatalf("expected parsed diagnostics, got %+v", report)
+	}
+}
+
+func TestTailEndpoint_ReturnsLastNLines(t *testing.T) {
+	fb := &builder.FakeBuilder{ConsoleLog: "line1\nline2\nline3\n"}
+	ts, cfg, _, cancel := newTestServer(t, fb)
+	defer cancel()
+
+	jobID := submitBundle(t, ts.URL, cfg, validBundleBytes(t, "ok"))
+	waitForJobTerminalHTTP(t, ts.URL, cfg, jobID)
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/jobs/"+jobID+"/tail?lines=2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(cfg.AuthHeader, cfg.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("tail failed: %d body=%s", resp.StatusCode, string(raw))
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "line2\nline3\n" {
+		t.Fatalf("unexpected tail payload: %q", string(raw))
+	}
+}
+
+func TestEventsEndpoint_StreamsBacklog(t *testing.T) {
+	ts, cfg, _, cancel := newTestServer(t, &builder.FakeBuilder{})
+	defer cancel()
+
+	jobID := submitBundle(t, ts.URL, cfg, validBundleBytes(t, "ok"))
+	waitForJobTerminalHTTP(t, ts.URL, cfg, jobID)
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/jobs/"+jobID+"/events?since=0", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(cfg.AuthHeader, cfg.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("events failed: %d body=%s", resp.StatusCode, string(raw))
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := string(raw)
+	if !strings.Contains(payload, "event: queued") {
+		t.Fatalf("expected queued event, got %q", payload)
+	}
+	if !strings.Contains(payload, "event: succeeded") {
+		t.Fatalf("expected succeeded event, got %q", payload)
+	}
 }
 
 func newTestServer(t *testing.T, b builder.Builder) (*httptest.Server, config.Config, *queue.Manager, context.CancelFunc) {

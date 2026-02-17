@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mblsha/spadeforge/internal/job"
@@ -92,6 +93,26 @@ func TestClient_SubmitAndDownloadAgainstTestServer(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/jobs/j1/artifacts":
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(artifact)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/jobs/j1/diagnostics":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"schema":1,"error_count":1,"warning_count":0,"info_count":0,"diagnostics":[{"severity":"ERROR","code":"Synth 8-2716","message":"syntax error","file":"hdl/spade.sv","line":1}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/jobs/j1/tail":
+			if r.URL.Query().Get("lines") != "3" {
+				t.Fatalf("expected lines=3, got %q", r.URL.Query().Get("lines"))
+			}
+			_, _ = w.Write([]byte("lineA\nlineB\nlineC\n"))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/jobs/j1/events":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(strings.Join([]string{
+				"id: 1",
+				"event: queued",
+				`data: {"seq":1,"job_id":"j1","type":"queued","state":"QUEUED","at":"2026-01-01T00:00:00Z"}`,
+				"",
+				"id: 2",
+				"event: succeeded",
+				`data: {"seq":2,"job_id":"j1","type":"succeeded","state":"SUCCEEDED","at":"2026-01-01T00:00:01Z"}`,
+				"",
+			}, "\n")))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -125,5 +146,31 @@ func TestClient_SubmitAndDownloadAgainstTestServer(t *testing.T) {
 	}
 	if !bytes.Equal(out.Bytes(), artifact) {
 		t.Fatalf("unexpected artifact payload")
+	}
+
+	report, err := c.GetDiagnostics(context.Background(), "j1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.ErrorCount != 1 || len(report.Diagnostics) != 1 {
+		t.Fatalf("unexpected diagnostics report: %+v", report)
+	}
+
+	tail, err := c.GetLogTail(context.Background(), "j1", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tail != "lineA\nlineB\nlineC\n" {
+		t.Fatalf("unexpected tail: %q", tail)
+	}
+
+	eventCount := 0
+	if err := c.StreamEvents(context.Background(), "j1", 0, func(ev *job.Event) {
+		eventCount++
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 2 {
+		t.Fatalf("expected 2 streamed events, got %d", eventCount)
 	}
 }
