@@ -9,6 +9,7 @@ Minimal remote Vivado build service for Spade bundles.
 - Executes Vivado in batch Tcl non-project mode
 - Exposes current step + heartbeat while jobs are running
 - Exposes REST endpoints for status, logs, and artifacts
+- Supports mDNS auto-discovery (`_spadeforge._tcp`) so clients can find the server without `--server`
 
 ## Layout
 
@@ -45,6 +46,10 @@ Minimal remote Vivado build service for Spade bundles.
 - `SPADEFORGE_RETENTION_DAYS`
 - `SPADEFORGE_USE_FAKE_BUILDER=1` (dry-run mode)
 - `SPADEFORGE_PRESERVE_WORK_DIR=1` (keep per-job work dirs for debugging; default removes them)
+- `SPADEFORGE_DISCOVERY_ENABLE=0` (disable mDNS advertisement)
+- `SPADEFORGE_DISCOVERY_SERVICE` (default `_spadeforge._tcp`)
+- `SPADEFORGE_DISCOVERY_DOMAIN` (default `local.`)
+- `SPADEFORGE_DISCOVERY_INSTANCE` (default `spadeforge`)
 
 ## Example
 
@@ -58,7 +63,6 @@ Submit from Linux side:
 
 ```bash
 spadeforge-cli \
-  --server http://127.0.0.1:8080 \
   --top top \
   --part xc7a35tcsg324-1 \
   --source build/spade.sv \
@@ -67,6 +71,7 @@ spadeforge-cli \
 ```
 
 This creates extracted artifacts under `output/<job_id>/`. Use `--out-zip <path>` to also keep the raw zip.
+By default the CLI auto-discovers the server via mDNS when `--server` is not set.
 
 ## Tests
 

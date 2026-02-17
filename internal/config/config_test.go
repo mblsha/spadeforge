@@ -37,6 +37,15 @@ func TestConfig_Defaults(t *testing.T) {
 	if cfg.VivadoBin == "" {
 		t.Fatalf("expected default vivado bin")
 	}
+	if !cfg.DiscoveryEnabled {
+		t.Fatalf("expected discovery enabled by default")
+	}
+	if cfg.DiscoveryService == "" {
+		t.Fatalf("expected default discovery service")
+	}
+	if cfg.DiscoveryDomain == "" {
+		t.Fatalf("expected default discovery domain")
+	}
 }
 
 func TestConfig_Validate(t *testing.T) {
@@ -64,6 +73,7 @@ func TestConfig_FromEnv_PreserveWorkDir(t *testing.T) {
 	t.Setenv("SPADEFORGE_BASE_DIR", base)
 	t.Setenv("SPADEFORGE_PRESERVE_WORK_DIR", "1")
 	t.Setenv("SPADEFORGE_LISTEN_ADDR", ":8081")
+	t.Setenv("SPADEFORGE_DISCOVERY_ENABLE", "0")
 	_ = os.Unsetenv("SPADEFORGE_ALLOWLIST")
 
 	cfg, err := FromEnv()
@@ -72,5 +82,8 @@ func TestConfig_FromEnv_PreserveWorkDir(t *testing.T) {
 	}
 	if !cfg.PreserveWorkDir {
 		t.Fatalf("expected PreserveWorkDir enabled")
+	}
+	if cfg.DiscoveryEnabled {
+		t.Fatalf("expected discovery disabled")
 	}
 }

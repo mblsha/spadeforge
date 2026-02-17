@@ -45,7 +45,7 @@ func (b *FakeBuilder) Build(ctx context.Context, job BuildJob) (BuildResult, err
 		report("synth", "fake synth step running")
 		interval := b.HeartbeatInterval
 		if interval <= 0 {
-			interval = 2 * time.Second
+			interval = 30 * time.Second
 		}
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
