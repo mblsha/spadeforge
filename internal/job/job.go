@@ -24,6 +24,9 @@ type Record struct {
 	Message string `json:"message,omitempty"`
 	Error   string `json:"error,omitempty"`
 
+	CurrentStep string     `json:"current_step,omitempty"`
+	HeartbeatAt *time.Time `json:"heartbeat_at,omitempty"`
+
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 	StartedAt  *time.Time `json:"started_at,omitempty"`
@@ -57,9 +60,11 @@ func (r *Record) Transition(next State, now time.Time, message string) error {
 		r.FinishedAt = nil
 		r.ExitCode = nil
 		r.Error = ""
+		r.HeartbeatAt = &n
 	}
 	if next == StateSucceeded || next == StateFailed {
 		r.FinishedAt = &n
+		r.HeartbeatAt = &n
 	}
 	return nil
 }

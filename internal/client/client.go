@@ -91,6 +91,15 @@ func (c *HTTPClient) GetJob(ctx context.Context, jobID string) (*job.Record, err
 }
 
 func (c *HTTPClient) WaitForTerminal(ctx context.Context, jobID string, pollInterval time.Duration) (*job.Record, error) {
+	return c.WaitForTerminalWithProgress(ctx, jobID, pollInterval, nil)
+}
+
+func (c *HTTPClient) WaitForTerminalWithProgress(
+	ctx context.Context,
+	jobID string,
+	pollInterval time.Duration,
+	onUpdate func(record *job.Record),
+) (*job.Record, error) {
 	if pollInterval <= 0 {
 		pollInterval = 500 * time.Millisecond
 	}
@@ -100,6 +109,9 @@ func (c *HTTPClient) WaitForTerminal(ctx context.Context, jobID string, pollInte
 		record, err := c.GetJob(ctx, jobID)
 		if err != nil {
 			return nil, err
+		}
+		if onUpdate != nil {
+			onUpdate(record)
 		}
 		if record.Terminal() {
 			return record, nil

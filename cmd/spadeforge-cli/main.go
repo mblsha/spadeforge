@@ -1,16 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/mblsha/spadeforge/internal/client"
+	"github.com/mblsha/spadeforge/internal/job"
 )
 
 func main() {
@@ -36,7 +39,8 @@ func runSubmit(args []string) error {
 	project := fs.String("project", "spade", "project name")
 	top := fs.String("top", "", "top module name")
 	part := fs.String("part", "", "target FPGA part")
-	outZip := fs.String("out", "artifacts.zip", "where to write downloaded artifacts zip")
+	outputDir := fs.String("output-dir", "output", "directory where artifacts are extracted (under <output-dir>/<job_id>/)")
+	outZip := fs.String("out-zip", "", "optional path to save raw downloaded artifacts zip")
 	wait := fs.Bool("wait", true, "poll until job reaches terminal state")
 	poll := fs.Duration("poll", 2*time.Second, "status polling interval")
 	runSwim := fs.Bool("run-swim", false, "run `swim build` before bundling")
@@ -90,21 +94,58 @@ func runSubmit(args []string) error {
 		return nil
 	}
 
-	record, err := c.WaitForTerminal(ctx, jobID, *poll)
+	var lastState string
+	var lastStep string
+	var lastHeartbeat string
+	record, err := c.WaitForTerminalWithProgress(ctx, jobID, *poll, func(rec *job.Record) {
+		heartbeat := "-"
+		if rec.HeartbeatAt != nil {
+			heartbeat = rec.HeartbeatAt.UTC().Format(time.RFC3339)
+		}
+		step := rec.CurrentStep
+		if step == "" {
+			step = "-"
+		}
+
+		shouldPrint := rec.State != job.StateSucceeded && rec.State != job.StateFailed
+		changed := string(rec.State) != lastState || step != lastStep || heartbeat != lastHeartbeat
+		if shouldPrint && changed {
+			fmt.Printf("state=%s step=%s heartbeat=%s message=%s\n", rec.State, step, heartbeat, rec.Message)
+			lastState = string(rec.State)
+			lastStep = step
+			lastHeartbeat = heartbeat
+		}
+	})
 	if err != nil {
 		return err
 	}
 	fmt.Printf("job finished: %s (%s)\n", record.State, record.Message)
 
-	f, err := os.OpenFile(*outZip, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
+	var artifactZip bytes.Buffer
+	if err := c.DownloadArtifacts(ctx, jobID, &artifactZip); err != nil {
 		return err
 	}
-	defer f.Close()
-	if err := c.DownloadArtifacts(ctx, jobID, f); err != nil {
+
+	if strings.TrimSpace(*outZip) != "" {
+		f, err := os.OpenFile(*outZip, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		if err != nil {
+			return err
+		}
+		if _, err := f.Write(artifactZip.Bytes()); err != nil {
+			f.Close()
+			return err
+		}
+		if err := f.Close(); err != nil {
+			return err
+		}
+		fmt.Printf("artifact zip written to %s\n", *outZip)
+	}
+
+	finalOutputDir := filepath.Join(*outputDir, jobID)
+	if err := client.ExtractArtifactZip(artifactZip.Bytes(), finalOutputDir); err != nil {
 		return err
 	}
-	fmt.Printf("artifacts written to %s\n", *outZip)
+	fmt.Printf("artifacts extracted to %s\n", finalOutputDir)
 
 	if record.State != "SUCCEEDED" {
 		return fmt.Errorf("job failed: %s", record.Error)
@@ -128,8 +169,8 @@ func (s *stringListFlag) Set(v string) error {
 
 func usage() {
 	_, _ = os.Stderr.WriteString("spadeforge-cli usage:\n")
-	_, _ = os.Stderr.WriteString("  spadeforge-cli --top <top> --part <part> --source build/spade.sv [--xdc top.xdc]\n")
-	_, _ = os.Stderr.WriteString("  spadeforge-cli submit --top <top> --part <part> --source build/spade.sv [--xdc top.xdc]\n")
+	_, _ = os.Stderr.WriteString("  spadeforge-cli --top <top> --part <part> --source build/spade.sv [--xdc top.xdc] [--output-dir output]\n")
+	_, _ = os.Stderr.WriteString("  spadeforge-cli submit --top <top> --part <part> --source build/spade.sv [--xdc top.xdc] [--output-dir output]\n")
 }
 
 func defaultString(v, fallback string) string {

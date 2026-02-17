@@ -160,8 +160,10 @@ func (m *Manager) recoverJobs() error {
 			rec.UpdatedAt = now
 			rec.Message = "requeued after restart"
 			rec.Error = ""
+			rec.CurrentStep = ""
 			rec.StartedAt = nil
 			rec.FinishedAt = nil
+			rec.HeartbeatAt = nil
 			rec.ExitCode = nil
 			if err := m.store.Save(rec); err != nil {
 				return err
@@ -198,6 +200,7 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 		m.mu.Unlock()
 		return
 	}
+	rec.CurrentStep = "launch"
 	_ = m.store.Save(rec)
 	m.mu.Unlock()
 
@@ -210,6 +213,7 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 		SourceDir:    m.store.SourceDir(rec.ID),
 		ArtifactsDir: m.store.ArtifactsJobDir(rec.ID),
 		Manifest:     rec.Manifest,
+		Progress:     m.progressUpdater(rec.ID),
 	})
 
 	m.mu.Lock()
@@ -225,6 +229,7 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 			rec.ExitCode = &result.ExitCode
 			rec.FinishedAt = &rec.UpdatedAt
 		}
+		rec.CurrentStep = "failed"
 	} else {
 		if markErr := rec.MarkSucceeded(now, result.Message, result.ExitCode); markErr != nil {
 			rec.State = job.StateSucceeded
@@ -234,9 +239,12 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 			rec.ExitCode = &result.ExitCode
 			rec.FinishedAt = &rec.UpdatedAt
 		}
+		rec.CurrentStep = "done"
 	}
 	_ = m.store.Save(rec)
-	_ = m.store.RemoveWorkDir(rec.ID)
+	if !m.cfg.PreserveWorkDir {
+		_ = m.store.RemoveWorkDir(rec.ID)
+	}
 }
 
 func (m *Manager) enqueue(jobID string) {
@@ -249,4 +257,29 @@ func newJobID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(buf[:]), nil
+}
+
+func (m *Manager) progressUpdater(jobID string) builder.ProgressFunc {
+	return func(update builder.ProgressUpdate) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		rec, ok := m.jobs[jobID]
+		if !ok || rec.State != job.StateRunning {
+			return
+		}
+
+		now := update.HeartbeatAt.UTC()
+		if now.IsZero() {
+			now = time.Now().UTC()
+		}
+		rec.UpdatedAt = now
+		rec.HeartbeatAt = &now
+		if update.Step != "" {
+			rec.CurrentStep = update.Step
+		}
+		if update.Message != "" {
+			rec.Message = update.Message
+		}
+		_ = m.store.Save(rec)
+	}
 }

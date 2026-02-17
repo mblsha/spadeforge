@@ -7,6 +7,7 @@ Minimal remote Vivado build service for Spade bundles.
 - Accepts a zipped job bundle (`manifest.json` + HDL + XDC)
 - Spools jobs to disk and runs one worker sequentially
 - Executes Vivado in batch Tcl non-project mode
+- Exposes current step + heartbeat while jobs are running
 - Exposes REST endpoints for status, logs, and artifacts
 
 ## Layout
@@ -26,6 +27,8 @@ Minimal remote Vivado build service for Spade bundles.
 - `GET /v1/jobs/{id}/artifacts`
 - `GET /v1/jobs/{id}/log`
 
+`GET /v1/jobs/{id}` includes `current_step` and `heartbeat_at` while running.
+
 ## Server config (env)
 
 - `SPADEFORGE_BASE_DIR` (required)
@@ -41,6 +44,7 @@ Minimal remote Vivado build service for Spade bundles.
 - `SPADEFORGE_WORKER_TIMEOUT`
 - `SPADEFORGE_RETENTION_DAYS`
 - `SPADEFORGE_USE_FAKE_BUILDER=1` (dry-run mode)
+- `SPADEFORGE_PRESERVE_WORK_DIR=1` (keep per-job work dirs for debugging; default removes them)
 
 ## Example
 
@@ -58,8 +62,11 @@ spadeforge-cli \
   --top top \
   --part xc7a35tcsg324-1 \
   --source build/spade.sv \
-  --xdc constraints/top.xdc
+  --xdc constraints/top.xdc \
+  --output-dir output
 ```
+
+This creates extracted artifacts under `output/<job_id>/`. Use `--out-zip <path>` to also keep the raw zip.
 
 ## Tests
 

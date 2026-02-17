@@ -37,8 +37,9 @@ type Config struct {
 	MaxExtractedTotalBytes int64
 	MaxExtractedFileBytes  int64
 
-	WorkerTimeout time.Duration
-	RetentionDays int
+	WorkerTimeout   time.Duration
+	RetentionDays   int
+	PreserveWorkDir bool
 
 	VivadoBin string
 }
@@ -65,6 +66,7 @@ func FromEnv() (Config, error) {
 	cfg.AuthHeader = getEnv("SPADEFORGE_AUTH_HEADER", cfg.AuthHeader)
 	cfg.Allowlist = parseCSV(os.Getenv("SPADEFORGE_ALLOWLIST"))
 	cfg.VivadoBin = getEnv("SPADEFORGE_VIVADO_BIN", cfg.VivadoBin)
+	cfg.PreserveWorkDir = parseBoolEnv(os.Getenv("SPADEFORGE_PRESERVE_WORK_DIR"))
 
 	if v := strings.TrimSpace(os.Getenv("SPADEFORGE_MAX_UPLOAD_BYTES")); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
@@ -187,6 +189,15 @@ func parseCSV(v string) []string {
 		}
 	}
 	return out
+}
+
+func parseBoolEnv(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateAllowEntry(entry string) error {

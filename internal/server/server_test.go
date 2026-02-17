@@ -102,6 +102,52 @@ func TestSubmitJob_RejectsMissingToken(t *testing.T) {
 	}
 }
 
+func TestJobStatus_ExposesStepAndHeartbeat(t *testing.T) {
+	block := make(chan struct{})
+	fb := &builder.FakeBuilder{
+		BlockCh:           block,
+		HeartbeatInterval: 25 * time.Millisecond,
+	}
+	ts, cfg, _, cancel := newTestServer(t, fb)
+	defer cancel()
+
+	jobID := submitBundle(t, ts.URL, cfg, validBundleBytes(t, "running"))
+
+	var running job.Record
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		req, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/jobs/"+jobID, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set(cfg.AuthHeader, cfg.Token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			raw, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			t.Fatalf("status failed: %d body=%s", resp.StatusCode, string(raw))
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&running); err != nil {
+			resp.Body.Close()
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if running.State == job.StateRunning && running.CurrentStep != "" && running.HeartbeatAt != nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if running.State != job.StateRunning || running.CurrentStep == "" || running.HeartbeatAt == nil {
+		t.Fatalf("expected running job with progress fields, got %+v", running)
+	}
+
+	close(block)
+	waitForJobTerminalHTTP(t, ts.URL, cfg, jobID)
+}
+
 func newTestServer(t *testing.T, b builder.Builder) (*httptest.Server, config.Config, *queue.Manager, context.CancelFunc) {
 	t.Helper()
 	cfg := config.Default()

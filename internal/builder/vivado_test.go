@@ -37,8 +37,22 @@ func TestTclGeneration_ContainsExpectedReadCommands(t *testing.T) {
 	if !strings.Contains(tcl, "synth_design -top top -part xc7a35tcsg324-1") {
 		t.Fatalf("expected synth_design command")
 	}
+	if !strings.Contains(tcl, "SPADEFORGE_STEP:synth") {
+		t.Fatalf("expected step marker in tcl")
+	}
 	if !strings.Contains(tcl, "write_bitstream -force") {
 		t.Fatalf("expected write_bitstream command")
+	}
+}
+
+func TestParseStepLine(t *testing.T) {
+	step, ok := parseStepLine("INFO: SPADEFORGE_STEP:route")
+	if !ok || step != "route" {
+		t.Fatalf("expected parsed step route, got step=%q ok=%v", step, ok)
+	}
+	_, ok = parseStepLine("INFO: no marker")
+	if ok {
+		t.Fatalf("did not expect marker parse")
 	}
 }
 

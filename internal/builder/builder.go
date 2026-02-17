@@ -2,9 +2,18 @@ package builder
 
 import (
 	"context"
+	"time"
 
 	"github.com/mblsha/spadeforge/internal/manifest"
 )
+
+type ProgressUpdate struct {
+	Step        string
+	Message     string
+	HeartbeatAt time.Time
+}
+
+type ProgressFunc func(update ProgressUpdate)
 
 type BuildJob struct {
 	ID           string
@@ -12,6 +21,7 @@ type BuildJob struct {
 	SourceDir    string
 	ArtifactsDir string
 	Manifest     manifest.Manifest
+	Progress     ProgressFunc
 }
 
 type BuildResult struct {

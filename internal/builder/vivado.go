@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"time"
 )
 
 type CommandSpec struct {
@@ -44,9 +47,10 @@ func (OSRunner) Run(ctx context.Context, spec CommandSpec, stdout, stderr io.Wri
 }
 
 type VivadoBuilder struct {
-	VivadoBin string
-	Runner    Runner
-	OSName    string
+	VivadoBin         string
+	Runner            Runner
+	OSName            string
+	HeartbeatInterval time.Duration
 }
 
 func NewVivadoBuilder(vivadoBin string, runner Runner) *VivadoBuilder {
@@ -54,13 +58,24 @@ func NewVivadoBuilder(vivadoBin string, runner Runner) *VivadoBuilder {
 		runner = OSRunner{}
 	}
 	return &VivadoBuilder{
-		VivadoBin: vivadoBin,
-		Runner:    runner,
-		OSName:    runtime.GOOS,
+		VivadoBin:         vivadoBin,
+		Runner:            runner,
+		OSName:            runtime.GOOS,
+		HeartbeatInterval: 5 * time.Second,
 	}
 }
 
 func (b *VivadoBuilder) Build(ctx context.Context, job BuildJob) (BuildResult, error) {
+	report := func(step, message string) {
+		if job.Progress != nil {
+			job.Progress(ProgressUpdate{
+				Step:        step,
+				Message:     message,
+				HeartbeatAt: time.Now().UTC(),
+			})
+		}
+	}
+
 	if err := os.MkdirAll(job.ArtifactsDir, 0o755); err != nil {
 		return BuildResult{ExitCode: 1}, fmt.Errorf("create artifacts directory: %w", err)
 	}
@@ -81,8 +96,32 @@ func (b *VivadoBuilder) Build(ctx context.Context, job BuildJob) (BuildResult, e
 	}
 	defer consoleFile.Close()
 
+	report("launch", "starting vivado")
+	progressWriter := newStepProgressWriter(consoleFile, report)
+	heartbeatDone := make(chan struct{})
+	heartbeatInterval := b.HeartbeatInterval
+	if heartbeatInterval <= 0 {
+		heartbeatInterval = 5 * time.Second
+	}
+	go func() {
+		ticker := time.NewTicker(heartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatDone:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				report("", "")
+			}
+		}
+	}()
+
 	spec := buildVivadoCommand(b.OSName, b.VivadoBin, tclPath, job.WorkDir)
-	exitCode, runErr := b.Runner.Run(ctx, spec, consoleFile, consoleFile)
+	exitCode, runErr := b.Runner.Run(ctx, spec, progressWriter, progressWriter)
+	close(heartbeatDone)
+	progressWriter.Flush()
 
 	copyIfExists(filepath.Join(job.WorkDir, "vivado.log"), filepath.Join(job.ArtifactsDir, "vivado.log"))
 	copyIfExists(filepath.Join(job.WorkDir, "vivado.jou"), filepath.Join(job.ArtifactsDir, "vivado.jou"))
@@ -109,6 +148,7 @@ func (b *VivadoBuilder) Build(ctx context.Context, job BuildJob) (BuildResult, e
 func GenerateTCL(job BuildJob) string {
 	lines := []string{
 		"set_msg_config -id {Common 17-55} -suppress",
+		`puts "SPADEFORGE_STEP:read_sources"`,
 	}
 	includeArg := ""
 	if len(job.Manifest.IncludeDirs) > 0 {
@@ -125,12 +165,18 @@ func GenerateTCL(job BuildJob) string {
 		lines = append(lines, fmt.Sprintf("read_xdc %s", tclBrace(filepath.ToSlash(filepath.Join(job.SourceDir, filepath.FromSlash(xdc))))))
 	}
 	lines = append(lines,
+		`puts "SPADEFORGE_STEP:synth"`,
 		fmt.Sprintf("synth_design -top %s -part %s", tclWord(job.Manifest.Top), tclWord(job.Manifest.Part)),
+		`puts "SPADEFORGE_STEP:opt"`,
 		"opt_design",
+		`puts "SPADEFORGE_STEP:place"`,
 		"place_design",
+		`puts "SPADEFORGE_STEP:route"`,
 		"route_design",
+		`puts "SPADEFORGE_STEP:reports"`,
 		fmt.Sprintf("report_timing_summary -file %s", tclBrace(filepath.ToSlash(filepath.Join(job.ArtifactsDir, "timing.rpt")))),
 		fmt.Sprintf("report_utilization -file %s", tclBrace(filepath.ToSlash(filepath.Join(job.ArtifactsDir, "utilization.rpt")))),
+		`puts "SPADEFORGE_STEP:bitstream"`,
 		fmt.Sprintf("write_bitstream -force %s", tclBrace(filepath.ToSlash(filepath.Join(job.ArtifactsDir, "design.bit")))),
 		"exit",
 	)
@@ -162,6 +208,83 @@ func copyIfExists(src, dst string) {
 	}
 	defer wf.Close()
 	_, _ = io.Copy(wf, rf)
+}
+
+type stepProgressWriter struct {
+	mu     sync.Mutex
+	out    io.Writer
+	buf    []byte
+	report func(step, message string)
+}
+
+func newStepProgressWriter(out io.Writer, report func(step, message string)) *stepProgressWriter {
+	return &stepProgressWriter{
+		out:    out,
+		report: report,
+	}
+}
+
+func (w *stepProgressWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	n, err := w.out.Write(p)
+	if n <= 0 {
+		return n, err
+	}
+	w.buf = append(w.buf, p[:n]...)
+	for {
+		idx := bytes.IndexByte(w.buf, '\n')
+		if idx < 0 {
+			break
+		}
+		line := strings.TrimSpace(string(w.buf[:idx]))
+		w.buf = w.buf[idx+1:]
+		w.handleLine(line)
+	}
+	return n, err
+}
+
+func (w *stepProgressWriter) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.buf) == 0 {
+		return
+	}
+	line := strings.TrimSpace(string(w.buf))
+	w.buf = nil
+	w.handleLine(line)
+}
+
+func (w *stepProgressWriter) handleLine(line string) {
+	if line == "" {
+		return
+	}
+	if step, ok := parseStepLine(line); ok {
+		w.report(step, "running "+step)
+	}
+}
+
+func parseStepLine(line string) (string, bool) {
+	const marker = "SPADEFORGE_STEP:"
+	idx := strings.Index(line, marker)
+	if idx < 0 {
+		return "", false
+	}
+	step := strings.TrimSpace(line[idx+len(marker):])
+	if step == "" {
+		return "", false
+	}
+	for i, r := range step {
+		if r == ' ' || r == '\t' || r == '\r' || r == '\n' {
+			step = step[:i]
+			break
+		}
+	}
+	if step == "" {
+		return "", false
+	}
+	return step, true
 }
 
 func tclBrace(v string) string {

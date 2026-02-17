@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/mblsha/spadeforge/internal/job"
 )
 
 func TestBundleBuilder_IncludesSpadeSVAndXDCAndManifest(t *testing.T) {
@@ -104,9 +106,15 @@ func TestClient_SubmitAndDownloadAgainstTestServer(t *testing.T) {
 	if jobID != "j1" {
 		t.Fatalf("expected j1, got %s", jobID)
 	}
-	rec, err := c.WaitForTerminal(context.Background(), "j1", 10)
+	updateCount := 0
+	rec, err := c.WaitForTerminalWithProgress(context.Background(), "j1", 10, func(record *job.Record) {
+		updateCount++
+	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if updateCount == 0 {
+		t.Fatalf("expected progress updates during polling")
 	}
 	if !rec.Terminal() {
 		t.Fatalf("expected terminal state")

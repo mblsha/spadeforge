@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestConfig_Defaults(t *testing.T) {
 	cfg := Default()
@@ -28,6 +31,9 @@ func TestConfig_Defaults(t *testing.T) {
 	if cfg.RetentionDays < 0 {
 		t.Fatalf("expected RetentionDays >= 0")
 	}
+	if cfg.PreserveWorkDir {
+		t.Fatalf("expected PreserveWorkDir disabled by default")
+	}
 	if cfg.VivadoBin == "" {
 		t.Fatalf("expected default vivado bin")
 	}
@@ -50,5 +56,21 @@ func TestConfig_Validate(t *testing.T) {
 	cfg3.Allowlist = []string{"not-an-ip"}
 	if err := cfg3.Validate(); err == nil {
 		t.Fatalf("expected error for invalid allowlist")
+	}
+}
+
+func TestConfig_FromEnv_PreserveWorkDir(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("SPADEFORGE_BASE_DIR", base)
+	t.Setenv("SPADEFORGE_PRESERVE_WORK_DIR", "1")
+	t.Setenv("SPADEFORGE_LISTEN_ADDR", ":8081")
+	_ = os.Unsetenv("SPADEFORGE_ALLOWLIST")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("from env failed: %v", err)
+	}
+	if !cfg.PreserveWorkDir {
+		t.Fatalf("expected PreserveWorkDir enabled")
 	}
 }

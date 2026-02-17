@@ -195,6 +195,70 @@ func TestQueue_IsSequential(t *testing.T) {
 	}
 }
 
+func TestWorker_ProgressStepAndHeartbeat(t *testing.T) {
+	cfg := testConfig(t)
+	st := store.New(cfg)
+	block := make(chan struct{})
+	fb := &builder.FakeBuilder{
+		BlockCh:           block,
+		HeartbeatInterval: 25 * time.Millisecond,
+	}
+	mgr := New(cfg, st, fb)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, err := mgr.Submit(context.Background(), bytes.NewReader(validBundleBytes(t, "progress")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForState(t, mgr, rec.ID, job.StateRunning)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		cur, ok := mgr.Get(rec.ID)
+		if ok && cur.CurrentStep == "synth" && cur.HeartbeatAt != nil {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	cur, _ := mgr.Get(rec.ID)
+	if cur.CurrentStep == "" || cur.HeartbeatAt == nil {
+		t.Fatalf("expected progress fields while running, got %+v", cur)
+	}
+
+	close(block)
+	final := waitForTerminalState(t, mgr, rec.ID)
+	if final.CurrentStep != "done" {
+		t.Fatalf("expected final step done, got %q", final.CurrentStep)
+	}
+}
+
+func TestWorker_PreserveWorkDirOption(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.PreserveWorkDir = true
+	st := store.New(cfg)
+	mgr := New(cfg, st, &builder.FakeBuilder{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, err := mgr.Submit(context.Background(), bytes.NewReader(validBundleBytes(t, "keep-work")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForTerminalState(t, mgr, rec.ID)
+	if _, err := os.Stat(st.WorkJobDir(rec.ID)); err != nil {
+		t.Fatalf("expected preserved work dir, got %v", err)
+	}
+}
+
 func waitForTerminalState(t *testing.T, mgr *Manager, id string) *job.Record {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
