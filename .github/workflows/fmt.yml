@@ -1,0 +1,40 @@
+name: Go Format
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  gofmt:
+    name: gofmt
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find . -name '*.go' -not -path './.git/*' | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            exit 0
+          fi
+          unformatted="$(gofmt -l "${files[@]}")"
+          if [ -n "${unformatted}" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "${unformatted}"
+            exit 1
+          fi
