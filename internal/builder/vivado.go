@@ -61,7 +61,7 @@ func NewVivadoBuilder(vivadoBin string, runner Runner) *VivadoBuilder {
 		VivadoBin:         vivadoBin,
 		Runner:            runner,
 		OSName:            runtime.GOOS,
-		HeartbeatInterval: 5 * time.Second,
+		HeartbeatInterval: 30 * time.Second,
 	}
 }
 
@@ -101,7 +101,7 @@ func (b *VivadoBuilder) Build(ctx context.Context, job BuildJob) (BuildResult, e
 	heartbeatDone := make(chan struct{})
 	heartbeatInterval := b.HeartbeatInterval
 	if heartbeatInterval <= 0 {
-		heartbeatInterval = 5 * time.Second
+		heartbeatInterval = 30 * time.Second
 	}
 	go func() {
 		ticker := time.NewTicker(heartbeatInterval)

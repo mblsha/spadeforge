@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -13,8 +14,11 @@ import (
 	"time"
 
 	"github.com/mblsha/spadeforge/internal/client"
+	"github.com/mblsha/spadeforge/internal/discovery"
 	"github.com/mblsha/spadeforge/internal/job"
 )
+
+var discoverFn = discovery.Discover
 
 func main() {
 	args := os.Args[1:]
@@ -33,7 +37,11 @@ func runSubmit(args []string) error {
 	var sources stringListFlag
 	var constraints stringListFlag
 
-	serverURL := fs.String("server", "http://127.0.0.1:8080", "builder server base url")
+	serverURL := fs.String("server", defaultString(os.Getenv("SPADEFORGE_SERVER"), ""), "builder server base url (if empty, auto-discover)")
+	discoverEnabled := fs.Bool("discover", true, "auto-discover server when --server is not provided")
+	discoverTimeout := fs.Duration("discover-timeout", 2*time.Second, "mDNS auto-discovery timeout")
+	discoverService := fs.String("discover-service", discovery.DefaultServiceName, "mDNS service name used for discovery")
+	discoverDomain := fs.String("discover-domain", discovery.DefaultDomain, "mDNS discovery domain")
 	token := fs.String("token", strings.TrimSpace(os.Getenv("SPADEFORGE_TOKEN")), "auth token")
 	authHeader := fs.String("auth-header", defaultString(os.Getenv("SPADEFORGE_AUTH_HEADER"), "X-Build-Token"), "auth header")
 	project := fs.String("project", "spade", "project name")
@@ -72,6 +80,11 @@ func runSubmit(args []string) error {
 		return fmt.Errorf("at least one --source is required")
 	}
 
+	resolvedServerURL, err := resolveServerURL(*serverURL, *discoverEnabled, *discoverTimeout, *discoverService, *discoverDomain)
+	if err != nil {
+		return err
+	}
+
 	bundle, err := client.BuildBundle(client.BundleSpec{
 		Project:     *project,
 		Top:         *top,
@@ -83,7 +96,7 @@ func runSubmit(args []string) error {
 		return err
 	}
 
-	c := &client.HTTPClient{BaseURL: *serverURL, Token: *token, AuthHeader: *authHeader}
+	c := &client.HTTPClient{BaseURL: resolvedServerURL, Token: *token, AuthHeader: *authHeader}
 	ctx := context.Background()
 	jobID, err := c.SubmitBundle(ctx, bundle)
 	if err != nil {
@@ -169,8 +182,8 @@ func (s *stringListFlag) Set(v string) error {
 
 func usage() {
 	_, _ = os.Stderr.WriteString("spadeforge-cli usage:\n")
-	_, _ = os.Stderr.WriteString("  spadeforge-cli --top <top> --part <part> --source build/spade.sv [--xdc top.xdc] [--output-dir output]\n")
-	_, _ = os.Stderr.WriteString("  spadeforge-cli submit --top <top> --part <part> --source build/spade.sv [--xdc top.xdc] [--output-dir output]\n")
+	_, _ = os.Stderr.WriteString("  spadeforge-cli --top <top> --part <part> --source build/spade.sv [--xdc top.xdc] [--output-dir output] [--server http://host:8080]\n")
+	_, _ = os.Stderr.WriteString("  spadeforge-cli submit --top <top> --part <part> --source build/spade.sv [--xdc top.xdc] [--output-dir output] [--server http://host:8080]\n")
 }
 
 func defaultString(v, fallback string) string {
@@ -178,4 +191,31 @@ func defaultString(v, fallback string) string {
 		return fallback
 	}
 	return strings.TrimSpace(v)
+}
+
+func resolveServerURL(
+	explicit string,
+	discover bool,
+	timeout time.Duration,
+	service string,
+	domain string,
+) (string, error) {
+	explicit = strings.TrimSpace(explicit)
+	if explicit != "" {
+		return explicit, nil
+	}
+	if !discover {
+		return "", errors.New("server is required when discovery is disabled; pass --server")
+	}
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	endpoint, err := discoverFn(ctx, service, domain)
+	if err != nil {
+		return "", fmt.Errorf("discover server via mDNS: %w", err)
+	}
+	fmt.Printf("discovered server: %s (instance=%s host=%s)\n", endpoint.URL, endpoint.Instance, endpoint.HostName)
+	return endpoint.URL, nil
 }

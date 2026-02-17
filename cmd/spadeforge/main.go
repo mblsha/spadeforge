@@ -13,6 +13,7 @@ import (
 
 	"github.com/mblsha/spadeforge/internal/builder"
 	"github.com/mblsha/spadeforge/internal/config"
+	"github.com/mblsha/spadeforge/internal/discovery"
 	"github.com/mblsha/spadeforge/internal/queue"
 	"github.com/mblsha/spadeforge/internal/server"
 	"github.com/mblsha/spadeforge/internal/store"
@@ -55,6 +56,34 @@ func runServer() error {
 	api := server.New(cfg, mgr)
 	httpServer := &http.Server{Addr: cfg.ListenAddr, Handler: api.Handler()}
 
+	var advertiser *discovery.Advertiser
+	if cfg.DiscoveryEnabled {
+		port, err := discovery.ParseListenPort(cfg.ListenAddr)
+		if err != nil {
+			log.Printf("discovery advertisement disabled: %v", err)
+		} else {
+			instance := cfg.DiscoveryInstance
+			if instance == "" {
+				instance = hostFallback()
+			}
+			advertiser, err = discovery.StartAdvertiser(
+				instance,
+				cfg.DiscoveryService,
+				cfg.DiscoveryDomain,
+				port,
+				[]string{"proto=http", "path=/healthz"},
+			)
+			if err != nil {
+				log.Printf("failed to start discovery advertisement: %v", err)
+			} else {
+				log.Printf("discovery advertisement enabled service=%s domain=%s instance=%s port=%d", cfg.DiscoveryService, cfg.DiscoveryDomain, instance, port)
+			}
+		}
+	}
+	if advertiser != nil {
+		defer advertiser.Close()
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		log.Printf("spadeforge server listening on %s", cfg.ListenAddr)
@@ -78,4 +107,12 @@ func usage() {
 	_, _ = os.Stderr.WriteString("spadeforge usage:\n")
 	_, _ = os.Stderr.WriteString("  spadeforge\n")
 	_, _ = os.Stderr.WriteString("  spadeforge server\n")
+}
+
+func hostFallback() string {
+	hostname, err := os.Hostname()
+	if err != nil || strings.TrimSpace(hostname) == "" {
+		return "spadeforge"
+	}
+	return strings.TrimSpace(hostname)
 }

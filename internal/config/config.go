@@ -21,6 +21,10 @@ const (
 	defaultWorkerTimeout           = 2 * time.Hour
 	defaultRetentionDays           = 14
 	defaultVivadoBin               = "vivado"
+	defaultDiscoveryEnabled        = true
+	defaultDiscoveryService        = "_spadeforge._tcp"
+	defaultDiscoveryDomain         = "local."
+	defaultDiscoveryInstance       = "spadeforge"
 )
 
 // Config controls server behavior.
@@ -42,6 +46,11 @@ type Config struct {
 	PreserveWorkDir bool
 
 	VivadoBin string
+
+	DiscoveryEnabled  bool
+	DiscoveryService  string
+	DiscoveryDomain   string
+	DiscoveryInstance string
 }
 
 func Default() Config {
@@ -55,6 +64,10 @@ func Default() Config {
 		WorkerTimeout:          defaultWorkerTimeout,
 		RetentionDays:          defaultRetentionDays,
 		VivadoBin:              defaultVivadoBin,
+		DiscoveryEnabled:       defaultDiscoveryEnabled,
+		DiscoveryService:       defaultDiscoveryService,
+		DiscoveryDomain:        defaultDiscoveryDomain,
+		DiscoveryInstance:      defaultDiscoveryInstance,
 	}
 }
 
@@ -67,6 +80,10 @@ func FromEnv() (Config, error) {
 	cfg.Allowlist = parseCSV(os.Getenv("SPADEFORGE_ALLOWLIST"))
 	cfg.VivadoBin = getEnv("SPADEFORGE_VIVADO_BIN", cfg.VivadoBin)
 	cfg.PreserveWorkDir = parseBoolEnv(os.Getenv("SPADEFORGE_PRESERVE_WORK_DIR"))
+	cfg.DiscoveryEnabled = parseBoolEnvWithDefault(os.Getenv("SPADEFORGE_DISCOVERY_ENABLE"), cfg.DiscoveryEnabled)
+	cfg.DiscoveryService = getEnv("SPADEFORGE_DISCOVERY_SERVICE", cfg.DiscoveryService)
+	cfg.DiscoveryDomain = getEnv("SPADEFORGE_DISCOVERY_DOMAIN", cfg.DiscoveryDomain)
+	cfg.DiscoveryInstance = getEnv("SPADEFORGE_DISCOVERY_INSTANCE", cfg.DiscoveryInstance)
 
 	if v := strings.TrimSpace(os.Getenv("SPADEFORGE_MAX_UPLOAD_BYTES")); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
@@ -145,6 +162,14 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.VivadoBin) == "" {
 		return errors.New("vivado bin is required")
 	}
+	if c.DiscoveryEnabled {
+		if strings.TrimSpace(c.DiscoveryService) == "" {
+			return errors.New("discovery service is required when discovery is enabled")
+		}
+		if strings.TrimSpace(c.DiscoveryDomain) == "" {
+			return errors.New("discovery domain is required when discovery is enabled")
+		}
+	}
 	for _, entry := range c.Allowlist {
 		if err := validateAllowEntry(entry); err != nil {
 			return err
@@ -197,6 +222,21 @@ func parseBoolEnv(v string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func parseBoolEnvWithDefault(v string, fallback bool) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(v))
+	if trimmed == "" {
+		return fallback
+	}
+	switch trimmed {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
 	}
 }
 
