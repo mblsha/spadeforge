@@ -307,6 +307,55 @@ func TestEvents_SubscribeProvidesBacklog(t *testing.T) {
 	}
 }
 
+func TestEvents_TerminalEventDeliveredWhenSubscriberBackedUp(t *testing.T) {
+	cfg := testConfig(t)
+	st := store.New(cfg)
+	mgr := New(cfg, st, &builder.FakeBuilder{})
+	mgr.subscriberBuf = 1
+
+	rec := job.New("job1", manifest.Manifest{Top: "top", Part: "part", Sources: []string{"hdl/spade.sv"}}, time.Now())
+	if err := rec.Transition(job.StateRunning, time.Now(), "running"); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr.mu.Lock()
+	mgr.jobs[rec.ID] = rec
+	mgr.emitEventLocked(rec, "running")
+	mgr.mu.Unlock()
+
+	_, ch, release, ok := mgr.SubscribeEvents(rec.ID, 0)
+	if !ok || ch == nil {
+		t.Fatalf("expected live subscription channel")
+	}
+	defer release()
+
+	mgr.mu.Lock()
+	rec.CurrentStep = "synth"
+	rec.Message = "running synth"
+	mgr.emitEventLocked(rec, "progress")
+
+	rec.CurrentStep = "route"
+	rec.Message = "running route"
+	mgr.emitEventLocked(rec, "progress")
+
+	if err := rec.MarkFailed(time.Now(), "build failed", errors.New("forced"), 1); err != nil {
+		mgr.mu.Unlock()
+		t.Fatal(err)
+	}
+	rec.CurrentStep = "failed"
+	mgr.emitEventLocked(rec, "failed")
+	mgr.mu.Unlock()
+
+	select {
+	case ev := <-ch:
+		if !ev.Terminal() {
+			t.Fatalf("expected terminal event, got %+v", ev)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatalf("timed out waiting for terminal event")
+	}
+}
+
 func waitForTerminalState(t *testing.T, mgr *Manager, id string) *job.Record {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

@@ -120,6 +120,23 @@ func TestInferFailure_FallbacksWhenNoDiagnostics(t *testing.T) {
 	}
 }
 
+func TestBuildReport_HandlesVeryLongLogLines(t *testing.T) {
+	longMsg := strings.Repeat("x", 90*1024)
+	line := "ERROR: [Synth 8-2716] " + longMsg + " [C:/work/top.sv:10]\n"
+	report := BuildReport(map[string][]byte{
+		"vivado.log": []byte(line),
+	})
+	if report.ErrorCount != 1 {
+		t.Fatalf("expected 1 error from long line, got %d", report.ErrorCount)
+	}
+	if len(report.Diagnostics) != 1 {
+		t.Fatalf("expected 1 diagnostic from long line, got %d", len(report.Diagnostics))
+	}
+	if report.Diagnostics[0].Code != "Synth 8-2716" {
+		t.Fatalf("unexpected diagnostic: %+v", report.Diagnostics[0])
+	}
+}
+
 func fixture(t *testing.T, name string) []byte {
 	t.Helper()
 	path := filepath.Join("testdata", name)

@@ -2,7 +2,9 @@ package diagnostics
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -22,25 +24,37 @@ func BuildReport(logs map[string][]byte) job.DiagnosticsReport {
 		if !ok {
 			continue
 		}
-		scanner := bufio.NewScanner(strings.NewReader(string(raw)))
-		for scanner.Scan() {
-			d, ok := parseLine(scanner.Text(), source)
+		reader := bufio.NewReader(bytes.NewReader(raw))
+		for {
+			line, err := reader.ReadString('\n')
+			if len(line) > 0 {
+				line = strings.TrimRight(line, "\r\n")
+			}
+			d, ok := parseLine(line, source)
 			if !ok {
-				continue
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					break
+				}
+			} else {
+				key := diagnosticKey(d)
+				if _, dup := seen[key]; !dup {
+					seen[key] = struct{}{}
+					report.Diagnostics = append(report.Diagnostics, d)
+					switch d.Severity {
+					case job.SeverityError:
+						report.ErrorCount++
+					case job.SeverityWarning:
+						report.WarningCount++
+					default:
+						report.InfoCount++
+					}
+				}
 			}
-			key := diagnosticKey(d)
-			if _, dup := seen[key]; dup {
-				continue
-			}
-			seen[key] = struct{}{}
-			report.Diagnostics = append(report.Diagnostics, d)
-			switch d.Severity {
-			case job.SeverityError:
-				report.ErrorCount++
-			case job.SeverityWarning:
-				report.WarningCount++
-			default:
-				report.InfoCount++
+			if err == io.EOF {
+				break
 			}
 		}
 	}

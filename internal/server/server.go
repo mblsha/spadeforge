@@ -254,6 +254,9 @@ func (a *API) handleGetEvents(w http.ResponseWriter, r *http.Request) {
 		case <-keepalive.C:
 			_, _ = w.Write([]byte(": keepalive\n\n"))
 			flusher.Flush()
+			if rec, ok := a.manager.Get(jobID); !ok || rec.Terminal() {
+				return
+			}
 		case ev, ok := <-ch:
 			if !ok {
 				return
