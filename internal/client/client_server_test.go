@@ -100,4 +100,20 @@ func TestClientServer_ProgressAndArtifacts(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(outDir, "console.log")); err != nil {
 		t.Fatalf("expected console.log in extracted output: %v", err)
 	}
+
+	report, err := cli.GetDiagnostics(context.Background(), jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report == nil {
+		t.Fatalf("expected diagnostics report")
+	}
+
+	tail, err := cli.GetLogTail(context.Background(), jobID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tail == "" {
+		t.Fatalf("expected non-empty log tail")
+	}
 }

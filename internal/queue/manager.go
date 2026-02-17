@@ -29,16 +29,25 @@ type Manager struct {
 	jobs  map[string]*job.Record
 	queue chan string
 
+	events          map[string][]job.Event
+	nextEventSeq    map[string]int64
+	subscribers     map[string]map[chan job.Event]struct{}
+	maxEventsPerJob int
+
 	once sync.Once
 }
 
 func New(cfg config.Config, st *store.Store, b builder.Builder) *Manager {
 	return &Manager{
-		cfg:     cfg,
-		store:   st,
-		builder: b,
-		jobs:    map[string]*job.Record{},
-		queue:   make(chan string, 4096),
+		cfg:             cfg,
+		store:           st,
+		builder:         b,
+		jobs:            map[string]*job.Record{},
+		queue:           make(chan string, 4096),
+		events:          map[string][]job.Event{},
+		nextEventSeq:    map[string]int64{},
+		subscribers:     map[string]map[chan job.Event]struct{}{},
+		maxEventsPerJob: 512,
 	}
 }
 
@@ -107,6 +116,7 @@ func (m *Manager) Submit(ctx context.Context, bundle io.Reader) (*job.Record, er
 
 	m.mu.Lock()
 	m.jobs[id] = rec
+	m.emitEventLocked(rec, "queued")
 	m.mu.Unlock()
 
 	m.enqueue(id)
@@ -160,6 +170,8 @@ func (m *Manager) recoverJobs() error {
 			rec.UpdatedAt = now
 			rec.Message = "requeued after restart"
 			rec.Error = ""
+			rec.FailureKind = ""
+			rec.FailureSummary = ""
 			rec.CurrentStep = ""
 			rec.StartedAt = nil
 			rec.FinishedAt = nil
@@ -202,12 +214,13 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 	}
 	rec.CurrentStep = "launch"
 	_ = m.store.Save(rec)
+	m.emitEventLocked(rec, "running")
 	m.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(parentCtx, m.cfg.WorkerTimeout)
 	defer cancel()
 
-	result, err := m.builder.Build(ctx, builder.BuildJob{
+	result, buildErr := m.builder.Build(ctx, builder.BuildJob{
 		ID:           rec.ID,
 		WorkDir:      m.store.WorkJobDir(rec.ID),
 		SourceDir:    m.store.SourceDir(rec.ID),
@@ -216,20 +229,39 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 		Progress:     m.progressUpdater(rec.ID),
 	})
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	finalState := job.StateSucceeded
+	if buildErr != nil {
+		finalState = job.StateFailed
+	}
 
+	diagReport := m.writeDiagnosticsReport(rec.ID)
+	failureKind := ""
+	failureSummary := ""
+	if finalState == job.StateFailed {
+		failureKind, failureSummary = inferFailure(diagReport, result.Message, buildErr)
+	}
+	_ = m.writeArtifactManifest(rec.ID, finalState, result, diagReport, failureKind, failureSummary)
+
+	m.mu.Lock()
+	rec, ok = m.jobs[id]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
 	now := time.Now()
-	if err != nil {
-		if markErr := rec.MarkFailed(now, result.Message, err, result.ExitCode); markErr != nil {
+	if buildErr != nil {
+		if markErr := rec.MarkFailed(now, result.Message, buildErr, result.ExitCode); markErr != nil {
 			rec.State = job.StateFailed
 			rec.UpdatedAt = now.UTC()
-			rec.Error = err.Error()
+			rec.Error = buildErr.Error()
 			rec.Message = result.Message
 			rec.ExitCode = &result.ExitCode
 			rec.FinishedAt = &rec.UpdatedAt
 		}
+		rec.FailureKind = failureKind
+		rec.FailureSummary = failureSummary
 		rec.CurrentStep = "failed"
+		m.emitEventLocked(rec, "failed")
 	} else {
 		if markErr := rec.MarkSucceeded(now, result.Message, result.ExitCode); markErr != nil {
 			rec.State = job.StateSucceeded
@@ -239,11 +271,18 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 			rec.ExitCode = &result.ExitCode
 			rec.FinishedAt = &rec.UpdatedAt
 		}
+		rec.FailureKind = ""
+		rec.FailureSummary = ""
 		rec.CurrentStep = "done"
+		m.emitEventLocked(rec, "succeeded")
 	}
 	_ = m.store.Save(rec)
-	if !m.cfg.PreserveWorkDir {
-		_ = m.store.RemoveWorkDir(rec.ID)
+	jobID := rec.ID
+	preserveWorkDir := m.cfg.PreserveWorkDir
+	m.mu.Unlock()
+
+	if !preserveWorkDir {
+		_ = m.store.RemoveWorkDir(jobID)
 	}
 }
 
@@ -281,5 +320,101 @@ func (m *Manager) progressUpdater(jobID string) builder.ProgressFunc {
 			rec.Message = update.Message
 		}
 		_ = m.store.Save(rec)
+		m.emitEventLocked(rec, "progress")
+	}
+}
+
+func (m *Manager) SubscribeEvents(jobID string, since int64) ([]job.Event, <-chan job.Event, func(), bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	rec, ok := m.jobs[jobID]
+	if !ok {
+		return nil, nil, nil, false
+	}
+
+	backlog := m.eventsSinceLocked(jobID, since)
+	if rec.Terminal() {
+		return backlog, nil, func() {}, true
+	}
+
+	ch := make(chan job.Event, 128)
+	if m.subscribers[jobID] == nil {
+		m.subscribers[jobID] = map[chan job.Event]struct{}{}
+	}
+	m.subscribers[jobID][ch] = struct{}{}
+	cancel := func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		subs := m.subscribers[jobID]
+		if subs == nil {
+			return
+		}
+		if _, ok := subs[ch]; ok {
+			delete(subs, ch)
+			close(ch)
+		}
+		if len(subs) == 0 {
+			delete(m.subscribers, jobID)
+		}
+	}
+	return backlog, ch, cancel, true
+}
+
+func (m *Manager) eventsSinceLocked(jobID string, since int64) []job.Event {
+	src := m.events[jobID]
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]job.Event, 0, len(src))
+	for _, ev := range src {
+		if ev.Seq > since {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+func (m *Manager) emitEventLocked(rec *job.Record, eventType string) {
+	now := time.Now().UTC()
+	seq := m.nextEventSeq[rec.ID] + 1
+	m.nextEventSeq[rec.ID] = seq
+
+	var heartbeat *time.Time
+	if rec.HeartbeatAt != nil {
+		hb := rec.HeartbeatAt.UTC()
+		heartbeat = &hb
+	}
+	var exitCode *int
+	if rec.ExitCode != nil {
+		ec := *rec.ExitCode
+		exitCode = &ec
+	}
+
+	ev := job.Event{
+		Seq:            seq,
+		JobID:          rec.ID,
+		Type:           eventType,
+		State:          rec.State,
+		Step:           rec.CurrentStep,
+		Message:        rec.Message,
+		Error:          rec.Error,
+		FailureKind:    rec.FailureKind,
+		FailureSummary: rec.FailureSummary,
+		HeartbeatAt:    heartbeat,
+		ExitCode:       exitCode,
+		At:             now,
+	}
+	list := append(m.events[rec.ID], ev)
+	if len(list) > m.maxEventsPerJob {
+		list = list[len(list)-m.maxEventsPerJob:]
+	}
+	m.events[rec.ID] = list
+
+	for ch := range m.subscribers[rec.ID] {
+		select {
+		case ch <- ev:
+		default:
+		}
 	}
 }
