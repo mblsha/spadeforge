@@ -33,6 +33,7 @@ type Manager struct {
 	nextEventSeq    map[string]int64
 	subscribers     map[string]map[chan job.Event]struct{}
 	maxEventsPerJob int
+	subscriberBuf   int
 
 	once sync.Once
 }
@@ -48,6 +49,7 @@ func New(cfg config.Config, st *store.Store, b builder.Builder) *Manager {
 		nextEventSeq:    map[string]int64{},
 		subscribers:     map[string]map[chan job.Event]struct{}{},
 		maxEventsPerJob: 512,
+		subscriberBuf:   128,
 	}
 }
 
@@ -338,7 +340,11 @@ func (m *Manager) SubscribeEvents(jobID string, since int64) ([]job.Event, <-cha
 		return backlog, nil, func() {}, true
 	}
 
-	ch := make(chan job.Event, 128)
+	buf := m.subscriberBuf
+	if buf <= 0 {
+		buf = 1
+	}
+	ch := make(chan job.Event, buf)
 	if m.subscribers[jobID] == nil {
 		m.subscribers[jobID] = map[chan job.Event]struct{}{}
 	}
@@ -412,9 +418,29 @@ func (m *Manager) emitEventLocked(rec *job.Record, eventType string) {
 	m.events[rec.ID] = list
 
 	for ch := range m.subscribers[rec.ID] {
-		select {
-		case ch <- ev:
-		default:
-		}
+		publishEvent(ch, ev)
+	}
+}
+
+func publishEvent(ch chan job.Event, ev job.Event) {
+	select {
+	case ch <- ev:
+		return
+	default:
+	}
+
+	// For non-terminal updates, dropping events is acceptable when a subscriber is slow.
+	if !ev.Terminal() {
+		return
+	}
+
+	// Guarantee terminal delivery: evict one queued event and retry.
+	select {
+	case <-ch:
+	default:
+	}
+	select {
+	case ch <- ev:
+	default:
 	}
 }
