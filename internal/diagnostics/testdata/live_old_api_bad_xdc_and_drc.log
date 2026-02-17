@@ -1,0 +1,6 @@
+CRITICAL WARNING: [Common 17-163] Missing value for option 'objects', please type 'set_property -help' for usage info. [C:/Users/mblsh/src/spadeforge/_run/work/6eb30d60bc011e4b5d14dcbe944948ba/src/constraints/bad_constraints.xdc:2]
+WARNING: [Place 46-29] Timing had been disabled during Placer and, therefore, physical synthesis in Placer will be skipped.
+ERROR: [DRC NSTD-1] Unspecified I/O Standard: 10 out of 10 logical ports use I/O standard (IOSTANDARD) value 'DEFAULT', instead of a user assigned specific value. This design will fail to generate a bitstream unless all logical ports have a user specified I/O standard value defined.
+ERROR: [DRC UCIO-1] Unconstrained Logical Port: 10 out of 10 logical ports have no user assigned specific location constraint (LOC). This design will fail to generate a bitstream unless all logical ports have a user specified site LOC constraint defined.
+ERROR: [Vivado 12-1345] Error(s) found during DRC. Bitgen not run.
+ERROR: [Common 17-39] 'write_bitstream' failed due to earlier errors.
