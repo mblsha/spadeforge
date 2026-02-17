@@ -1,0 +1,4 @@
+ERROR: [Synth 8-2716] syntax error near 'assign' [C:/Users/mblsh/src/spadeforge/_run/work/545da4cfa56121e488ecba01806ca1d0/src/hdl/syntax_error.sv:649]
+ERROR: [Synth 8-10307] SystemVerilog keyword 'assign' used in incorrect context [C:/Users/mblsh/src/spadeforge/_run/work/545da4cfa56121e488ecba01806ca1d0/src/hdl/syntax_error.sv:649]
+ERROR: [Synth 8-12188] Failed to read verilog 'C:/Users/mblsh/src/spadeforge/_run/work/545da4cfa56121e488ecba01806ca1d0/src/hdl/syntax_error.sv'
+ERROR: [Common 17-69] Command failed: Synthesis failed - please see the console or run log file for details

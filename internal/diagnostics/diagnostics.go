@@ -72,14 +72,19 @@ func firstError(report job.DiagnosticsReport) (job.Diagnostic, bool) {
 }
 
 func classify(d job.Diagnostic) string {
-	lower := strings.ToLower(d.Message + " " + d.Code + " " + d.Tool)
+	lower := strings.ToLower(d.Message + " " + d.Code + " " + d.Tool + " " + d.File)
+	tool := strings.ToLower(strings.TrimSpace(d.Tool))
 	switch {
 	case strings.Contains(lower, "syntax"):
 		return "syntax"
-	case strings.Contains(lower, "constraint") || strings.Contains(lower, "xdc") || strings.Contains(lower, "nstd") || strings.Contains(lower, "ucio"):
+	case strings.Contains(lower, "constraint") || strings.Contains(lower, ".xdc") || strings.Contains(lower, "nstd") || strings.Contains(lower, "ucio") || strings.HasPrefix(tool, "drc"):
 		return "constraints"
 	case strings.Contains(lower, "timing"):
 		return "timing"
+	case strings.HasPrefix(tool, "synth") || strings.Contains(lower, "synthesis failed") || strings.Contains(lower, "module '") && strings.Contains(lower, "not found"):
+		return "synthesis"
+	case strings.HasPrefix(tool, "place") || strings.HasPrefix(tool, "route") || strings.HasPrefix(tool, "vivado") || strings.Contains(lower, "bitstream"):
+		return "implementation"
 	default:
 		return "internal"
 	}
@@ -220,5 +225,5 @@ func firstToken(v string) string {
 }
 
 func diagnosticKey(d job.Diagnostic) string {
-	return fmt.Sprintf("%s|%s|%s|%s|%d|%d|%s", d.Severity, d.Code, d.Message, d.File, d.Line, d.Column, d.Source)
+	return fmt.Sprintf("%s|%s|%s|%s|%d|%d", d.Severity, d.Code, d.Message, d.File, d.Line, d.Column)
 }
