@@ -111,6 +111,12 @@ func copyIPs(in []net.IP) []net.IP {
 	return out
 }
 
+// tailscaleCGNAT is the 100.64.0.0/10 range used by Tailscale.
+var tailscaleCGNAT = net.IPNet{
+	IP:   net.IP{100, 64, 0, 0},
+	Mask: net.CIDRMask(10, 32),
+}
+
 func pickInterfaces() []net.Interface {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -124,10 +130,46 @@ func pickInterfaces() []net.Interface {
 		if iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
+		if isTailscale(iface) {
+			continue
+		}
 		out = append(out, iface)
 	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+// isTailscale returns true if every IPv4 unicast address on the interface is
+// in the Tailscale CGNAT range (100.64.0.0/10). Interfaces without IPv4
+// addresses are not considered Tailscale.
+func isTailscale(iface net.Interface) bool {
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return false
+	}
+	return onlyTailscaleIPv4(addrs)
+}
+
+func onlyTailscaleIPv4(addrs []net.Addr) bool {
+	if len(addrs) == 0 {
+		return false
+	}
+	sawIPv4 := false
+	for _, a := range addrs {
+		ipNet, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip := ipNet.IP.To4()
+		if ip == nil {
+			continue // skip IPv6, check only IPv4
+		}
+		sawIPv4 = true
+		if !tailscaleCGNAT.Contains(ip) {
+			return false
+		}
+	}
+	return sawIPv4
 }
