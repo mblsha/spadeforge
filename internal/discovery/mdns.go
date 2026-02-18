@@ -141,9 +141,8 @@ func pickInterfaces() []net.Interface {
 	return out
 }
 
-// isTailscale returns true if every IPv4 unicast address on the interface is
-// in the Tailscale CGNAT range (100.64.0.0/10). Interfaces without IPv4
-// addresses are not considered Tailscale.
+// isTailscale returns true for known Tailscale interface identities, with a
+// conservative fallback for renamed tunnel adapters.
 func isTailscale(iface net.Interface) bool {
 	if isTailscaleName(iface.Name) {
 		return true
