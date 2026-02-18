@@ -145,11 +145,29 @@ func pickInterfaces() []net.Interface {
 // in the Tailscale CGNAT range (100.64.0.0/10). Interfaces without IPv4
 // addresses are not considered Tailscale.
 func isTailscale(iface net.Interface) bool {
+	if isTailscaleName(iface.Name) {
+		return true
+	}
 	addrs, err := iface.Addrs()
 	if err != nil {
 		return false
 	}
-	return onlyTailscaleIPv4(addrs)
+	// Fallback for renamed adapters: require both a tunnel-like interface
+	// fingerprint and Tailscale CGNAT addresses.
+	return isLikelyUserspaceTunnel(iface) && onlyTailscaleIPv4(addrs)
+}
+
+func isTailscaleName(name string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	return normalized == "tailscale" || strings.HasPrefix(normalized, "tailscale")
+}
+
+func isLikelyUserspaceTunnel(iface net.Interface) bool {
+	return iface.MTU == 1280 &&
+		len(iface.HardwareAddr) == 0 &&
+		iface.Flags&net.FlagRunning != 0 &&
+		iface.Flags&net.FlagLoopback == 0 &&
+		iface.Flags&net.FlagBroadcast == 0
 }
 
 func onlyTailscaleIPv4(addrs []net.Addr) bool {
