@@ -5,6 +5,85 @@ import (
 	"testing"
 )
 
+func TestIsTailscaleName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{name: "exact", in: "Tailscale", want: true},
+		{name: "prefix", in: "tailscale0", want: true},
+		{name: "trimmed", in: "  tailscale  ", want: true},
+		{name: "not tailscale", in: "Ethernet", want: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isTailscaleName(tt.in); got != tt.want {
+				t.Fatalf("isTailscaleName(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsLikelyUserspaceTunnel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		iface net.Interface
+		want  bool
+	}{
+		{
+			name: "wintun-like interface",
+			iface: net.Interface{
+				MTU:   1280,
+				Flags: net.FlagUp | net.FlagRunning,
+			},
+			want: true,
+		},
+		{
+			name: "broadcast-capable interface",
+			iface: net.Interface{
+				MTU:          1280,
+				Flags:        net.FlagUp | net.FlagRunning | net.FlagBroadcast,
+				HardwareAddr: []byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55},
+			},
+			want: false,
+		},
+		{
+			name: "not running",
+			iface: net.Interface{
+				MTU:   1280,
+				Flags: net.FlagUp,
+			},
+			want: false,
+		},
+		{
+			name: "different mtu",
+			iface: net.Interface{
+				MTU:   1500,
+				Flags: net.FlagUp | net.FlagRunning,
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isLikelyUserspaceTunnel(tt.iface); got != tt.want {
+				t.Fatalf("isLikelyUserspaceTunnel() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestOnlyTailscaleIPv4(t *testing.T) {
 	t.Parallel()
 
