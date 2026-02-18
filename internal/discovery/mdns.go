@@ -67,6 +67,10 @@ type Advertiser struct {
 }
 
 func StartAdvertiser(instance, service, domain string, port int, txt []string) (*Advertiser, error) {
+	return StartAdvertiserForListenHost(instance, service, domain, port, txt, "")
+}
+
+func StartAdvertiserForListenHost(instance, service, domain string, port int, txt []string, listenHost string) (*Advertiser, error) {
 	if strings.TrimSpace(service) == "" {
 		service = DefaultServiceName
 	}
@@ -80,7 +84,12 @@ func StartAdvertiser(instance, service, domain string, port int, txt []string) (
 		return nil, fmt.Errorf("invalid advertise port: %d", port)
 	}
 
-	server, err := zeroconf.Register(instance, service, domain, port, txt, pickInterfaces())
+	ifaces, err := advertiseInterfacesForListenHost(listenHost)
+	if err != nil {
+		return nil, fmt.Errorf("select advertise interfaces: %w", err)
+	}
+
+	server, err := zeroconf.Register(instance, service, domain, port, txt, ifaces)
 	if err != nil {
 		return nil, fmt.Errorf("start mdns advertiser: %w", err)
 	}
@@ -124,13 +133,7 @@ func pickInterfaces() []net.Interface {
 	}
 	out := make([]net.Interface, 0, len(ifaces))
 	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 {
-			continue
-		}
-		if iface.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		if isTailscale(iface) {
+		if !isEligibleDiscoveryInterface(iface) {
 			continue
 		}
 		out = append(out, iface)
@@ -139,6 +142,124 @@ func pickInterfaces() []net.Interface {
 		return nil
 	}
 	return out
+}
+
+func advertiseInterfacesForListenHost(listenHost string) ([]net.Interface, error) {
+	ifaces := pickInterfaces()
+	if len(ifaces) == 0 {
+		return nil, nil
+	}
+	if isWildcardListenHost(listenHost) {
+		return ifaces, nil
+	}
+
+	targets, err := resolveListenHostIPs(listenHost)
+	if err != nil {
+		return nil, err
+	}
+	targetSet := make(map[string]struct{}, len(targets))
+	for _, ip := range targets {
+		if ip == nil {
+			continue
+		}
+		targetSet[ipKey(ip)] = struct{}{}
+	}
+	if len(targetSet) == 0 {
+		return nil, fmt.Errorf("listen host %q resolved to no usable IPs", listenHost)
+	}
+
+	out := make([]net.Interface, 0, len(ifaces))
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		if addrsContainAnyIP(addrs, targetSet) {
+			out = append(out, iface)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no eligible interface matches listen host %q", listenHost)
+	}
+	return out, nil
+}
+
+func isEligibleDiscoveryInterface(iface net.Interface) bool {
+	if iface.Flags&net.FlagUp == 0 {
+		return false
+	}
+	if iface.Flags&net.FlagLoopback != 0 {
+		return false
+	}
+	if isTailscale(iface) {
+		return false
+	}
+	return true
+}
+
+func isWildcardListenHost(host string) bool {
+	trimmed := strings.TrimSpace(host)
+	if trimmed == "" {
+		return true
+	}
+	if i := strings.IndexByte(trimmed, '%'); i >= 0 {
+		trimmed = trimmed[:i]
+	}
+	ip := net.ParseIP(trimmed)
+	return ip != nil && ip.IsUnspecified()
+}
+
+func resolveListenHostIPs(host string) ([]net.IP, error) {
+	trimmed := strings.TrimSpace(host)
+	if trimmed == "" {
+		return nil, nil
+	}
+	noZone := trimmed
+	if i := strings.IndexByte(noZone, '%'); i >= 0 {
+		noZone = noZone[:i]
+	}
+	if ip := net.ParseIP(noZone); ip != nil {
+		return []net.IP{ip}, nil
+	}
+	ips, err := net.LookupIP(trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("resolve listen host %q: %w", host, err)
+	}
+	return ips, nil
+}
+
+func addrsContainAnyIP(addrs []net.Addr, targets map[string]struct{}) bool {
+	for _, addr := range addrs {
+		ip := addrIP(addr)
+		if ip == nil {
+			continue
+		}
+		if _, ok := targets[ipKey(ip)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func addrIP(addr net.Addr) net.IP {
+	switch v := addr.(type) {
+	case *net.IPNet:
+		return v.IP
+	case *net.IPAddr:
+		return v.IP
+	default:
+		return nil
+	}
+}
+
+func ipKey(ip net.IP) string {
+	if ip == nil {
+		return ""
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4.String()
+	}
+	return ip.String()
 }
 
 // isTailscale returns true for known Tailscale interface identities, with a
