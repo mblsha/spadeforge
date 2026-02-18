@@ -69,12 +69,13 @@ func runServer() error {
 			if instance == "" {
 				instance = hostFallback()
 			}
-			advertiser, err = discovery.StartAdvertiser(
+			advertiser, err = discovery.StartAdvertiserForListenHost(
 				instance,
 				cfg.DiscoveryService,
 				cfg.DiscoveryDomain,
 				port,
 				[]string{"proto=http", "path=/healthz"},
+				host,
 			)
 			if err != nil {
 				log.Printf("failed to start discovery advertisement: %v", err)
