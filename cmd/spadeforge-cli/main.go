@@ -174,7 +174,7 @@ func runSubmit(args []string) error {
 
 func waitForTerminal(ctx context.Context, c *client.HTTPClient, jobID string, poll time.Duration, stream bool) (*job.Record, error) {
 	if stream {
-		return waitForTerminalViaEvents(ctx, c, jobID)
+		return waitForTerminalViaEvents(ctx, c, jobID, poll)
 	}
 
 	var lastState string
@@ -201,32 +201,46 @@ func waitForTerminal(ctx context.Context, c *client.HTTPClient, jobID string, po
 	})
 }
 
-func waitForTerminalViaEvents(ctx context.Context, c *client.HTTPClient, jobID string) (*job.Record, error) {
+func waitForTerminalViaEvents(ctx context.Context, c *client.HTTPClient, jobID string, poll time.Duration) (*job.Record, error) {
 	var lastState string
 	var lastStep string
 	var lastHeartbeat string
 
-	if err := c.StreamEvents(ctx, jobID, 0, func(ev *job.Event) {
+	printProgress := func(state job.State, step string, heartbeatAt *time.Time, message string) {
 		heartbeat := "-"
-		if ev.HeartbeatAt != nil {
-			heartbeat = ev.HeartbeatAt.UTC().Format(time.RFC3339)
+		if heartbeatAt != nil {
+			heartbeat = heartbeatAt.UTC().Format(time.RFC3339)
 		}
-		step := ev.Step
 		if step == "" {
 			step = "-"
 		}
-		shouldPrint := ev.State != job.StateSucceeded && ev.State != job.StateFailed
-		changed := string(ev.State) != lastState || step != lastStep || heartbeat != lastHeartbeat
+		shouldPrint := state != job.StateSucceeded && state != job.StateFailed
+		changed := string(state) != lastState || step != lastStep || heartbeat != lastHeartbeat
 		if shouldPrint && changed {
-			fmt.Printf("state=%s step=%s heartbeat=%s message=%s\n", ev.State, step, heartbeat, ev.Message)
-			lastState = string(ev.State)
+			fmt.Printf("state=%s step=%s heartbeat=%s message=%s\n", state, step, heartbeat, message)
+			lastState = string(state)
 			lastStep = step
 			lastHeartbeat = heartbeat
 		}
+	}
+
+	if err := c.StreamEvents(ctx, jobID, 0, func(ev *job.Event) {
+		printProgress(ev.State, ev.Step, ev.HeartbeatAt, ev.Message)
 	}); err != nil {
 		return nil, err
 	}
-	return c.GetJob(ctx, jobID)
+
+	rec, err := c.GetJob(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	if rec.Terminal() {
+		return rec, nil
+	}
+
+	return c.WaitForTerminalWithProgress(ctx, jobID, poll, func(update *job.Record) {
+		printProgress(update.State, update.CurrentStep, update.HeartbeatAt, update.Message)
+	})
 }
 
 func printDiagnostics(report *job.DiagnosticsReport, limit int) {
