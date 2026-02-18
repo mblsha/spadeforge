@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -58,9 +59,11 @@ func runServer() error {
 
 	var advertiser *discovery.Advertiser
 	if cfg.DiscoveryEnabled {
-		port, err := discovery.ParseListenPort(cfg.ListenAddr)
+		host, port, err := parseListenHostPort(cfg.ListenAddr)
 		if err != nil {
 			log.Printf("discovery advertisement disabled: %v", err)
+		} else if isLoopbackListenHost(host) {
+			log.Printf("discovery advertisement disabled: listen address %q is loopback-only", cfg.ListenAddr)
 		} else {
 			instance := cfg.DiscoveryInstance
 			if instance == "" {
@@ -115,4 +118,33 @@ func hostFallback() string {
 		return "spadeforge"
 	}
 	return strings.TrimSpace(hostname)
+}
+
+func parseListenHostPort(listenAddr string) (string, int, error) {
+	port, err := discovery.ParseListenPort(listenAddr)
+	if err != nil {
+		return "", 0, err
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(listenAddr))
+	if err != nil {
+		return "", 0, err
+	}
+	return strings.TrimSpace(host), port, nil
+}
+
+func isLoopbackListenHost(host string) bool {
+	trimmed := strings.TrimSpace(host)
+	if trimmed == "" {
+		return false
+	}
+	lowered := strings.ToLower(trimmed)
+	lowered = strings.TrimSuffix(lowered, ".")
+	if lowered == "localhost" {
+		return true
+	}
+	if idx := strings.IndexByte(lowered, '%'); idx >= 0 {
+		lowered = lowered[:idx]
+	}
+	ip := net.ParseIP(lowered)
+	return ip != nil && ip.IsLoopback()
 }
