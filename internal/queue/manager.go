@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -215,9 +216,12 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 		return
 	}
 	rec.CurrentStep = "launch"
+	startTop := rec.Manifest.Top
+	startPart := rec.Manifest.Part
 	_ = m.store.Save(rec)
 	m.emitEventLocked(rec, "running")
 	m.mu.Unlock()
+	log.Printf("[job %s] started top=%q part=%q", id, startTop, startPart)
 
 	ctx, cancel := context.WithTimeout(parentCtx, m.cfg.WorkerTimeout)
 	defer cancel()
@@ -251,6 +255,7 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 		return
 	}
 	now := time.Now()
+	terminalLog := ""
 	if buildErr != nil {
 		if markErr := rec.MarkFailed(now, result.Message, buildErr, result.ExitCode); markErr != nil {
 			rec.State = job.StateFailed
@@ -263,6 +268,18 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 		rec.FailureKind = failureKind
 		rec.FailureSummary = failureSummary
 		rec.CurrentStep = "failed"
+		if failureKind != "" {
+			terminalLog = fmt.Sprintf(
+				"[job %s] failed kind=%s summary=%q message=%q error=%v",
+				id,
+				failureKind,
+				failureSummary,
+				result.Message,
+				buildErr,
+			)
+		} else {
+			terminalLog = fmt.Sprintf("[job %s] failed message=%q error=%v", id, result.Message, buildErr)
+		}
 		m.emitEventLocked(rec, "failed")
 	} else {
 		if markErr := rec.MarkSucceeded(now, result.Message, result.ExitCode); markErr != nil {
@@ -276,12 +293,16 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 		rec.FailureKind = ""
 		rec.FailureSummary = ""
 		rec.CurrentStep = "done"
+		terminalLog = fmt.Sprintf("[job %s] succeeded exit_code=%d message=%q", id, result.ExitCode, result.Message)
 		m.emitEventLocked(rec, "succeeded")
 	}
 	_ = m.store.Save(rec)
 	jobID := rec.ID
 	preserveWorkDir := m.cfg.PreserveWorkDir
 	m.mu.Unlock()
+	if terminalLog != "" {
+		log.Print(terminalLog)
+	}
 
 	if !preserveWorkDir {
 		_ = m.store.RemoveWorkDir(jobID)
@@ -303,9 +324,9 @@ func newJobID() (string, error) {
 func (m *Manager) progressUpdater(jobID string) builder.ProgressFunc {
 	return func(update builder.ProgressUpdate) {
 		m.mu.Lock()
-		defer m.mu.Unlock()
 		rec, ok := m.jobs[jobID]
 		if !ok || rec.State != job.StateRunning {
+			m.mu.Unlock()
 			return
 		}
 
@@ -315,7 +336,11 @@ func (m *Manager) progressUpdater(jobID string) builder.ProgressFunc {
 		}
 		rec.UpdatedAt = now
 		rec.HeartbeatAt = &now
+		logStep := ""
 		if update.Step != "" {
+			if update.Step != rec.CurrentStep {
+				logStep = update.Step
+			}
 			rec.CurrentStep = update.Step
 		}
 		if update.Message != "" {
@@ -323,6 +348,10 @@ func (m *Manager) progressUpdater(jobID string) builder.ProgressFunc {
 		}
 		_ = m.store.Save(rec)
 		m.emitEventLocked(rec, "progress")
+		m.mu.Unlock()
+		if logStep != "" {
+			log.Printf("[job %s] step=%s", jobID, logStep)
+		}
 	}
 }
 
