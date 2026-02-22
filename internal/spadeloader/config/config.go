@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,8 @@ const (
 	defaultDiscoveryDomain   = "local."
 	defaultDiscoveryInstance = "spadeloader"
 	defaultHistoryLimit      = 100
+	defaultMacOSCacheAppID   = "io.spadeforge.spadeloader"
+	defaultLinuxCacheAppName = "spadeloader"
 )
 
 var boardNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
@@ -73,6 +76,13 @@ func FromEnv() (Config, error) {
 	cfg := Default()
 	cfg.ListenAddr = getEnv("SPADELOADER_LISTEN_ADDR", cfg.ListenAddr)
 	cfg.BaseDir = strings.TrimSpace(os.Getenv("SPADELOADER_BASE_DIR"))
+	if cfg.BaseDir == "" {
+		baseDir, err := defaultBaseDir()
+		if err != nil {
+			return Config{}, fmt.Errorf("resolve default base dir: %w", err)
+		}
+		cfg.BaseDir = baseDir
+	}
 	cfg.Token = strings.TrimSpace(os.Getenv("SPADELOADER_TOKEN"))
 	cfg.AuthHeader = getEnv("SPADELOADER_AUTH_HEADER", cfg.AuthHeader)
 	cfg.Allowlist = parseCSV(os.Getenv("SPADELOADER_ALLOWLIST"))
@@ -264,4 +274,27 @@ func validateBoardName(board string) error {
 		return fmt.Errorf("invalid allowed board %q; expected pattern %s", board, boardNamePattern.String())
 	}
 	return nil
+}
+
+func defaultBaseDir() (string, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("determine user cache dir: %w (or set SPADELOADER_BASE_DIR)", err)
+	}
+	return defaultBaseDirFor(runtime.GOOS, cacheDir), nil
+}
+
+func defaultBaseDirFor(goos, userCacheDir string) string {
+	cacheRoot := strings.TrimSpace(userCacheDir)
+	if cacheRoot == "" {
+		return ""
+	}
+	switch goos {
+	case "darwin":
+		return filepath.Join(cacheRoot, defaultMacOSCacheAppID)
+	case "linux":
+		return filepath.Join(cacheRoot, defaultLinuxCacheAppName)
+	default:
+		return filepath.Join(cacheRoot, defaultLinuxCacheAppName)
+	}
 }

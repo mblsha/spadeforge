@@ -223,9 +223,16 @@ func TestBoardAllowlistGuard(t *testing.T) {
 		t.Fatalf("status = %d, want %d", status, http.StatusBadRequest)
 	}
 
-	status, _ = submitJob(t, ts.URL, "alchitry_au", "Blink", "design.bit", []byte("bitstream"), "", "")
+	status, body := submitJob(t, ts.URL, "alchitry_au", "Blink", "design.bit", []byte("bitstream"), "", "")
 	if status != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d", status, http.StatusAccepted)
+	}
+	var submitResp map[string]string
+	if err := json.Unmarshal([]byte(body), &submitResp); err != nil {
+		t.Fatalf("decode submit response: %v", err)
+	}
+	if jobID := strings.TrimSpace(submitResp["job_id"]); jobID != "" {
+		_ = waitForTerminalHTTP(t, ts.URL, jobID, "", "")
 	}
 }
 

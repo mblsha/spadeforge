@@ -1,6 +1,11 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+)
 
 func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("SPADELOADER_BASE_DIR", "/tmp/spadeloader-test")
@@ -74,5 +79,38 @@ func TestAllowedBoardsValidationRejectsInvalidValue(t *testing.T) {
 
 	if _, err := FromEnv(); err == nil {
 		t.Fatalf("expected error")
+	}
+}
+
+func TestDefaultBaseDirFor(t *testing.T) {
+	t.Parallel()
+
+	cacheRoot := "/tmp/cache-root"
+	if got := defaultBaseDirFor("darwin", cacheRoot); got != filepath.Join(cacheRoot, "io.spadeforge.spadeloader") {
+		t.Fatalf("darwin default base dir = %q", got)
+	}
+	if got := defaultBaseDirFor("linux", cacheRoot); got != filepath.Join(cacheRoot, "spadeloader") {
+		t.Fatalf("linux default base dir = %q", got)
+	}
+	if got := defaultBaseDirFor("freebsd", cacheRoot); got != filepath.Join(cacheRoot, "spadeloader") {
+		t.Fatalf("fallback default base dir = %q", got)
+	}
+}
+
+func TestFromEnvUsesDefaultBaseDirWhenUnset(t *testing.T) {
+	t.Setenv("SPADELOADER_BASE_DIR", "")
+
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		t.Skipf("os.UserCacheDir unavailable: %v", err)
+	}
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv() error: %v", err)
+	}
+	want := defaultBaseDirFor(runtime.GOOS, cacheDir)
+	if cfg.BaseDir != want {
+		t.Fatalf("BaseDir = %q, want %q", cfg.BaseDir, want)
 	}
 }
