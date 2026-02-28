@@ -57,13 +57,13 @@ func discoverWithDNSSD(ctx context.Context, service, domain string) (Endpoint, e
 		if _, seen := seenInstances[instance]; seen {
 			continue
 		}
-		seenInstances[instance] = struct{}{}
 
 		endpoint, err := resolveDNSSDEndpointForInstance(ctx, instance, service, domainArg)
 		if err != nil {
 			continue
 		}
 		if endpointHealthy(ctx, endpoint.URL) {
+			seenInstances[instance] = struct{}{}
 			cancel()
 			<-waitCh
 			return endpoint, nil
