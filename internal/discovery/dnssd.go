@@ -65,19 +65,19 @@ func discoverWithDNSSD(ctx context.Context, service, domain string) (Endpoint, e
 		}
 		if endpointHealthy(ctx, endpoint.URL) {
 			cancel()
-			_ = <-waitCh
+			<-waitCh
 			return endpoint, nil
 		}
 	}
 
 	if scanErr := scanner.Err(); scanErr != nil {
 		cancel()
-		_ = <-waitCh
+		<-waitCh
 		return Endpoint{}, fmt.Errorf("scan dns-sd browse output: %w", scanErr)
 	}
 
 	cancel()
-	_ = <-waitCh
+	<-waitCh
 	if ctx.Err() != nil {
 		return Endpoint{}, fmt.Errorf("discover %s failed: %w", service, ErrNoServiceFound)
 	}
@@ -124,24 +124,6 @@ func resolveDNSSDEndpointForInstance(ctx context.Context, instance, service, dom
 		HostName: normalizedHost,
 		Port:     port,
 	}, nil
-}
-
-func resolveHostWithDNSSD(ctx context.Context, host string) ([]net.IP, error) {
-	value, err := runDNSSDForFirstValue(ctx, []string{"-G", "v4v6", trimTrailingDot(host)}, func(line string) (string, bool) {
-		ip, ok := parseDNSSDAddressLine(line)
-		if !ok {
-			return "", false
-		}
-		return ip.String(), true
-	})
-	if err != nil {
-		return nil, err
-	}
-	ip := net.ParseIP(strings.TrimSpace(value))
-	if ip == nil {
-		return nil, fmt.Errorf("invalid dns-sd address %q", value)
-	}
-	return []net.IP{ip}, nil
 }
 
 func endpointHealthy(ctx context.Context, baseURL string) bool {
