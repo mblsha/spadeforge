@@ -64,6 +64,63 @@ func TestParseListenPort(t *testing.T) {
 	}
 }
 
+func TestPrimaryAdvertiseAddrForListenHost(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		listenHost string
+		port       int
+		want       string
+		expectErr  bool
+	}{
+		{
+			name:       "ipv4 literal",
+			listenHost: "192.168.1.20",
+			port:       8080,
+			want:       "192.168.1.20:8080",
+		},
+		{
+			name:       "ipv6 literal",
+			listenHost: "fd00::42",
+			port:       8081,
+			want:       "[fd00::42]:8081",
+		},
+		{
+			name:       "loopback host rejected",
+			listenHost: "127.0.0.1",
+			port:       8082,
+			expectErr:  true,
+		},
+		{
+			name:       "invalid port",
+			listenHost: "192.168.1.20",
+			port:       0,
+			expectErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := PrimaryAdvertiseAddrForListenHost(tt.listenHost, tt.port)
+			if tt.expectErr {
+				if err == nil {
+					t.Fatalf("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("PrimaryAdvertiseAddrForListenHost() error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("addr = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDiscoverWithBrowser_FindsEndpoint(t *testing.T) {
 	fb := &fakeBrowser{entries: []ServiceEntry{{
 		Instance: "spadeforge",

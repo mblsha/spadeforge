@@ -181,3 +181,20 @@ func TestObserveJobEventsDetectsStateChange(t *testing.T) {
 		t.Fatalf("last event %q missing state transition", last)
 	}
 }
+
+func TestViewShowsZeroconfPrimaryInHeader(t *testing.T) {
+	t.Parallel()
+
+	m, err := newModel(Options{
+		Client:               &client.HTTPClient{},
+		AdvertisePrimaryAddr: "10.0.0.9:8080",
+	})
+	if err != nil {
+		t.Fatalf("newModel() error: %v", err)
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "Zeroconf primary: 10.0.0.9:8080") {
+		t.Fatalf("view missing zeroconf primary header, got:\n%s", view)
+	}
+}

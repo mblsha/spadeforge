@@ -137,6 +137,62 @@ func ParseListenPort(listenAddr string) (int, error) {
 	return port, nil
 }
 
+func PrimaryAdvertiseAddrForListenHost(listenHost string, port int) (string, error) {
+	if port <= 0 || port > 65535 {
+		return "", fmt.Errorf("invalid advertise port: %d", port)
+	}
+
+	ip := primaryAdvertiseIPForListenHost(listenHost)
+	if ip == nil {
+		return "", errors.New("no usable advertise ip found")
+	}
+	return net.JoinHostPort(ip.String(), strconv.Itoa(port)), nil
+}
+
+func primaryAdvertiseIPForListenHost(listenHost string) net.IP {
+	trimmed := strings.TrimSpace(listenHost)
+	if !isWildcardListenHost(trimmed) {
+		ips, err := resolveListenHostIPs(trimmed)
+		if err != nil {
+			return nil
+		}
+		var ipv4 []net.IP
+		var ipv6 []net.IP
+		for _, ip := range ips {
+			if !validAdvertisedIP(ip) || ip.IsLoopback() {
+				continue
+			}
+			if ip4 := ip.To4(); ip4 != nil {
+				ipv4 = append(ipv4, ip4)
+				continue
+			}
+			ipv6 = append(ipv6, ip)
+		}
+		return pickIP(ipv4, ipv6)
+	}
+
+	var ipv4 []net.IP
+	var ipv6 []net.IP
+	for _, iface := range pickInterfaces() {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ip := addrIP(addr)
+			if !validAdvertisedIP(ip) || ip.IsLoopback() {
+				continue
+			}
+			if ip4 := ip.To4(); ip4 != nil {
+				ipv4 = append(ipv4, ip4)
+				continue
+			}
+			ipv6 = append(ipv6, ip)
+		}
+	}
+	return pickIP(ipv4, ipv6)
+}
+
 func pickIP(ipv4 []net.IP, ipv6 []net.IP) net.IP {
 	for _, ip := range ipv4 {
 		if validAdvertisedIP(ip) && !ip.IsLoopback() {
