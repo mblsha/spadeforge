@@ -38,7 +38,9 @@ func (a *API) Handler() http.Handler {
 func (a *API) routes() {
 	a.mux.HandleFunc("GET /healthz", a.handleHealthz)
 	a.mux.Handle("POST /v1/jobs", a.guard(http.HandlerFunc(a.handleSubmitJob)))
+	a.mux.Handle("GET /v1/jobs", a.guard(http.HandlerFunc(a.handleListJobs)))
 	a.mux.Handle("GET /v1/jobs/{id}", a.guard(http.HandlerFunc(a.handleGetJob)))
+	a.mux.Handle("POST /v1/jobs/{id}/reflash", a.guard(http.HandlerFunc(a.handleReflashJob)))
 	a.mux.Handle("GET /v1/jobs/{id}/log", a.guard(http.HandlerFunc(a.handleGetLog)))
 	a.mux.Handle("GET /v1/jobs/{id}/tail", a.guard(http.HandlerFunc(a.handleGetTail)))
 	a.mux.Handle("GET /v1/jobs/{id}/events", a.guard(http.HandlerFunc(a.handleGetEvents)))
@@ -153,6 +155,52 @@ func (a *API) handleGetJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rec)
+}
+
+func (a *API) handleListJobs(w http.ResponseWriter, r *http.Request) {
+	limit := a.cfg.HistoryLimit
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid limit query value"})
+			return
+		}
+		limit = n
+	}
+	if limit > a.cfg.HistoryLimit {
+		limit = a.cfg.HistoryLimit
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": a.manager.ListJobs(limit)})
+}
+
+func (a *API) handleReflashJob(w http.ResponseWriter, r *http.Request) {
+	sourceJobID := strings.TrimSpace(r.PathValue("id"))
+	sourceRec, ok := a.manager.Get(sourceJobID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "job not found"})
+		return
+	}
+	if !a.cfg.BoardAllowed(sourceRec.Board) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "board is not allowed by server policy"})
+		return
+	}
+
+	rec, err := a.manager.Reflash(r.Context(), sourceJobID)
+	if err != nil {
+		switch {
+		case errors.Is(err, queue.ErrJobNotFound), errors.Is(err, queue.ErrBitstreamUnavailable):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		default:
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"job_id":        rec.ID,
+		"source_job_id": sourceJobID,
+		"state":         string(rec.State),
+	})
 }
 
 func (a *API) handleGetLog(w http.ResponseWriter, r *http.Request) {
