@@ -4,10 +4,12 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -24,6 +26,11 @@ type SubmitRequest struct {
 	BitstreamName string
 	Bitstream     io.Reader
 }
+
+var (
+	ErrJobNotFound          = errors.New("job not found")
+	ErrBitstreamUnavailable = errors.New("source bitstream is unavailable")
+)
 
 type Manager struct {
 	cfg     config.Config
@@ -123,6 +130,26 @@ func (m *Manager) Get(jobID string) (*job.Record, bool) {
 	return &copyRec, true
 }
 
+func (m *Manager) ListJobs(limit int) []job.Record {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	out := make([]job.Record, 0, len(m.jobs))
+	for _, rec := range m.jobs {
+		out = append(out, *rec)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit]
+}
+
 func (m *Manager) ReadConsoleLog(jobID string) ([]byte, error) {
 	path := m.store.ConsoleLogPath(jobID)
 	return os.ReadFile(path)
@@ -130,6 +157,30 @@ func (m *Manager) ReadConsoleLog(jobID string) ([]byte, error) {
 
 func (m *Manager) ListRecentDesigns(limit int) ([]history.Item, error) {
 	return m.history.List(limit)
+}
+
+func (m *Manager) Reflash(ctx context.Context, sourceJobID string) (*job.Record, error) {
+	sourceRec, ok := m.Get(sourceJobID)
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrJobNotFound, sourceJobID)
+	}
+
+	srcPath := m.store.RequestBitstreamPath(sourceJobID)
+	file, err := os.Open(srcPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w: %s", ErrBitstreamUnavailable, sourceJobID)
+		}
+		return nil, fmt.Errorf("open source bitstream: %w", err)
+	}
+	defer file.Close()
+
+	return m.Submit(ctx, SubmitRequest{
+		Board:         sourceRec.Board,
+		DesignName:    sourceRec.DesignName,
+		BitstreamName: sourceRec.BitstreamName,
+		Bitstream:     file,
+	})
 }
 
 func (m *Manager) recoverJobs() error {

@@ -3,6 +3,7 @@ package queue
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -166,6 +167,138 @@ func TestManagerEventsAndTail(t *testing.T) {
 	}
 	if len(tail) == 0 {
 		t.Fatalf("expected non-empty console tail")
+	}
+}
+
+func TestManagerListJobsSortedDesc(t *testing.T) {
+	t.Parallel()
+
+	cfg := loaderconfig.Default()
+	cfg.BaseDir = t.TempDir()
+	cfg.WorkerTimeout = 2 * time.Second
+
+	st := store.New(cfg)
+	hs := history.New(cfg.HistoryPath(), cfg.HistoryLimit)
+	mgr := New(cfg, st, &flasher.FakeFlasher{}, hs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+
+	first, err := mgr.Submit(context.Background(), SubmitRequest{
+		Board:         "alchitry_au",
+		DesignName:    "First",
+		BitstreamName: "first.bit",
+		Bitstream:     bytes.NewBufferString("first"),
+	})
+	if err != nil {
+		t.Fatalf("Submit(first) error: %v", err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	second, err := mgr.Submit(context.Background(), SubmitRequest{
+		Board:         "alchitry_au",
+		DesignName:    "Second",
+		BitstreamName: "second.bit",
+		Bitstream:     bytes.NewBufferString("second"),
+	})
+	if err != nil {
+		t.Fatalf("Submit(second) error: %v", err)
+	}
+
+	waitForTerminal(t, mgr, first.ID, 3*time.Second)
+	waitForTerminal(t, mgr, second.ID, 3*time.Second)
+
+	items := mgr.ListJobs(10)
+	if len(items) < 2 {
+		t.Fatalf("len(items) = %d, want at least 2", len(items))
+	}
+	if items[0].ID != second.ID {
+		t.Fatalf("items[0].ID = %q, want %q", items[0].ID, second.ID)
+	}
+	if items[1].ID != first.ID {
+		t.Fatalf("items[1].ID = %q, want %q", items[1].ID, first.ID)
+	}
+
+	limited := mgr.ListJobs(1)
+	if len(limited) != 1 {
+		t.Fatalf("len(limited) = %d, want 1", len(limited))
+	}
+	if limited[0].ID != second.ID {
+		t.Fatalf("limited[0].ID = %q, want %q", limited[0].ID, second.ID)
+	}
+}
+
+func TestManagerReflash(t *testing.T) {
+	t.Parallel()
+
+	cfg := loaderconfig.Default()
+	cfg.BaseDir = t.TempDir()
+	cfg.WorkerTimeout = 2 * time.Second
+
+	st := store.New(cfg)
+	hs := history.New(cfg.HistoryPath(), cfg.HistoryLimit)
+	mgr := New(cfg, st, &flasher.FakeFlasher{}, hs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+
+	original, err := mgr.Submit(context.Background(), SubmitRequest{
+		Board:         "alchitry_au",
+		DesignName:    "Blink",
+		BitstreamName: "design.bit",
+		Bitstream:     bytes.NewBufferString("bitstream"),
+	})
+	if err != nil {
+		t.Fatalf("Submit() error: %v", err)
+	}
+	waitForTerminal(t, mgr, original.ID, 3*time.Second)
+
+	reflashed, err := mgr.Reflash(context.Background(), original.ID)
+	if err != nil {
+		t.Fatalf("Reflash() error: %v", err)
+	}
+	if reflashed.ID == original.ID {
+		t.Fatalf("expected different job ids")
+	}
+	if reflashed.Board != original.Board || reflashed.DesignName != original.DesignName {
+		t.Fatalf("unexpected reflash metadata: board=%q design=%q", reflashed.Board, reflashed.DesignName)
+	}
+	waitForTerminal(t, mgr, reflashed.ID, 3*time.Second)
+
+	items := mgr.ListJobs(2)
+	if len(items) != 2 {
+		t.Fatalf("len(items) = %d, want 2", len(items))
+	}
+	if items[0].ID != reflashed.ID {
+		t.Fatalf("items[0].ID = %q, want %q", items[0].ID, reflashed.ID)
+	}
+}
+
+func TestManagerReflashMissingSourceJob(t *testing.T) {
+	t.Parallel()
+
+	cfg := loaderconfig.Default()
+	cfg.BaseDir = t.TempDir()
+	cfg.WorkerTimeout = 2 * time.Second
+
+	st := store.New(cfg)
+	hs := history.New(cfg.HistoryPath(), cfg.HistoryLimit)
+	mgr := New(cfg, st, &flasher.FakeFlasher{}, hs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+
+	_, err := mgr.Reflash(context.Background(), "missing")
+	if !errors.Is(err, ErrJobNotFound) {
+		t.Fatalf("Reflash() error = %v, want ErrJobNotFound", err)
 	}
 }
 

@@ -236,6 +236,108 @@ func TestBoardAllowlistGuard(t *testing.T) {
 	}
 }
 
+func TestListJobsAndReflash(t *testing.T) {
+	t.Parallel()
+
+	cfg := loaderconfig.Default()
+	cfg.BaseDir = t.TempDir()
+	cfg.WorkerTimeout = 2 * time.Second
+
+	st := store.New(cfg)
+	hs := history.New(cfg.HistoryPath(), cfg.HistoryLimit)
+	mgr := queue.New(cfg, st, &flasher.FakeFlasher{}, hs)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+
+	api := New(cfg, mgr)
+	ts := httptest.NewServer(api.Handler())
+	defer ts.Close()
+
+	status, body := submitJob(t, ts.URL, "alchitry_au", "Blink", "design.bit", []byte("bitstream"), "", "")
+	if status != http.StatusAccepted {
+		t.Fatalf("submit status = %d, body=%s", status, body)
+	}
+	var submitResp map[string]string
+	if err := json.Unmarshal([]byte(body), &submitResp); err != nil {
+		t.Fatalf("decode submit response: %v", err)
+	}
+	sourceJobID := strings.TrimSpace(submitResp["job_id"])
+	if sourceJobID == "" {
+		t.Fatalf("job_id missing")
+	}
+	_ = waitForTerminalHTTP(t, ts.URL, sourceJobID, "", "")
+
+	resp, err := http.Get(ts.URL + "/v1/jobs?limit=5")
+	if err != nil {
+		t.Fatalf("GET jobs error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("jobs status = %d", resp.StatusCode)
+	}
+	var listPayload struct {
+		Items []job.Record `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&listPayload); err != nil {
+		t.Fatalf("decode jobs payload: %v", err)
+	}
+	if len(listPayload.Items) == 0 {
+		t.Fatalf("expected at least one job")
+	}
+	if listPayload.Items[0].ID != sourceJobID {
+		t.Fatalf("items[0].ID = %q, want %q", listPayload.Items[0].ID, sourceJobID)
+	}
+
+	reflashResp, err := http.Post(ts.URL+"/v1/jobs/"+sourceJobID+"/reflash", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST reflash error: %v", err)
+	}
+	defer reflashResp.Body.Close()
+	if reflashResp.StatusCode != http.StatusAccepted {
+		raw, _ := io.ReadAll(reflashResp.Body)
+		t.Fatalf("reflash status = %d body=%s", reflashResp.StatusCode, string(raw))
+	}
+	var reflashPayload map[string]string
+	if err := json.NewDecoder(reflashResp.Body).Decode(&reflashPayload); err != nil {
+		t.Fatalf("decode reflash payload: %v", err)
+	}
+	reflashedJobID := strings.TrimSpace(reflashPayload["job_id"])
+	if reflashedJobID == "" {
+		t.Fatalf("missing reflashed job_id")
+	}
+	if reflashedJobID == sourceJobID {
+		t.Fatalf("expected new job id")
+	}
+	_ = waitForTerminalHTTP(t, ts.URL, reflashedJobID, "", "")
+
+	resp2, err := http.Get(ts.URL + "/v1/jobs?limit=2")
+	if err != nil {
+		t.Fatalf("GET jobs (after reflash) error: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("jobs status after reflash = %d", resp2.StatusCode)
+	}
+	var listPayload2 struct {
+		Items []job.Record `json:"items"`
+	}
+	if err := json.NewDecoder(resp2.Body).Decode(&listPayload2); err != nil {
+		t.Fatalf("decode jobs payload (after reflash): %v", err)
+	}
+	if len(listPayload2.Items) != 2 {
+		t.Fatalf("len(items) = %d, want 2", len(listPayload2.Items))
+	}
+	if listPayload2.Items[0].ID != reflashedJobID {
+		t.Fatalf("items[0].ID = %q, want %q", listPayload2.Items[0].ID, reflashedJobID)
+	}
+	if listPayload2.Items[1].ID != sourceJobID {
+		t.Fatalf("items[1].ID = %q, want %q", listPayload2.Items[1].ID, sourceJobID)
+	}
+}
+
 func submitJob(t *testing.T, baseURL, board, designName, filename string, bitstream []byte, authHeader, token string) (int, string) {
 	t.Helper()
 

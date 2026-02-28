@@ -2,6 +2,52 @@ package main
 
 import "testing"
 
+func TestParseMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		args      []string
+		wantMode  string
+		wantRest  []string
+		expectErr bool
+	}{
+		{name: "default", args: nil, wantMode: "server"},
+		{name: "explicit server", args: []string{"server"}, wantMode: "server"},
+		{name: "tui", args: []string{"tui"}, wantMode: "tui"},
+		{name: "tui with args", args: []string{"tui", "--server", "http://127.0.0.1:8080"}, wantMode: "tui", wantRest: []string{"--server", "http://127.0.0.1:8080"}},
+		{name: "invalid", args: []string{"bad"}, expectErr: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			mode, rest, err := parseMode(tt.args)
+			if tt.expectErr {
+				if err == nil {
+					t.Fatalf("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseMode() error: %v", err)
+			}
+			if mode != tt.wantMode {
+				t.Fatalf("mode = %q, want %q", mode, tt.wantMode)
+			}
+			if len(rest) != len(tt.wantRest) {
+				t.Fatalf("len(rest) = %d, want %d", len(rest), len(tt.wantRest))
+			}
+			for i := range rest {
+				if rest[i] != tt.wantRest[i] {
+					t.Fatalf("rest[%d] = %q, want %q", i, rest[i], tt.wantRest[i])
+				}
+			}
+		})
+	}
+}
+
 func TestParseListenHostPort(t *testing.T) {
 	t.Parallel()
 

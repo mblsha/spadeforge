@@ -24,12 +24,38 @@ import (
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] != "server" {
+	mode, args, err := parseMode(os.Args[1:])
+	if err != nil {
 		usage()
 		os.Exit(2)
 	}
-	if err := runServer(); err != nil {
-		log.Fatalf("server failed: %v", err)
+	switch mode {
+	case "server":
+		if len(args) > 0 {
+			usage()
+			os.Exit(2)
+		}
+		if err := runServer(); err != nil {
+			log.Fatalf("server failed: %v", err)
+		}
+	case "tui":
+		if err := runTUI(args); err != nil {
+			log.Fatalf("tui failed: %v", err)
+		}
+	}
+}
+
+func parseMode(args []string) (string, []string, error) {
+	if len(args) == 0 {
+		return "server", nil, nil
+	}
+	switch strings.TrimSpace(args[0]) {
+	case "server":
+		return "server", args[1:], nil
+	case "tui":
+		return "tui", args[1:], nil
+	default:
+		return "", nil, fmt.Errorf("unknown mode %q", args[0])
 	}
 }
 
@@ -120,6 +146,7 @@ func usage() {
 	_, _ = os.Stderr.WriteString("spadeloader usage:\n")
 	_, _ = os.Stderr.WriteString("  spadeloader\n")
 	_, _ = os.Stderr.WriteString("  spadeloader server\n")
+	_, _ = os.Stderr.WriteString("  spadeloader tui [--server <url>]\n")
 }
 
 func hostFallback() string {
