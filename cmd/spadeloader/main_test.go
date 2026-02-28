@@ -88,6 +88,45 @@ func TestParseListenHostPort(t *testing.T) {
 	}
 }
 
+func TestLocalServerURLForClient(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		listen    string
+		wantURL   string
+		expectErr bool
+	}{
+		{name: "all interfaces", listen: ":8080", wantURL: "http://127.0.0.1:8080"},
+		{name: "unspecified ipv4", listen: "0.0.0.0:8081", wantURL: "http://127.0.0.1:8081"},
+		{name: "unspecified ipv6", listen: "[::]:8082", wantURL: "http://127.0.0.1:8082"},
+		{name: "localhost", listen: "localhost:8083", wantURL: "http://127.0.0.1:8083"},
+		{name: "ipv4", listen: "192.168.1.10:8084", wantURL: "http://192.168.1.10:8084"},
+		{name: "ipv6", listen: "[fd00::10]:8085", wantURL: "http://[fd00::10]:8085"},
+		{name: "invalid", listen: "8080", expectErr: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := localServerURLForClient(tt.listen)
+			if tt.expectErr {
+				if err == nil {
+					t.Fatalf("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("localServerURLForClient(%q) error: %v", tt.listen, err)
+			}
+			if got != tt.wantURL {
+				t.Fatalf("url = %q, want %q", got, tt.wantURL)
+			}
+		})
+	}
+}
+
 func TestIsLoopbackListenHost(t *testing.T) {
 	t.Parallel()
 

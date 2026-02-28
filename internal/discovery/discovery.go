@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -36,6 +37,14 @@ type Browser interface {
 }
 
 func Discover(ctx context.Context, service, domain string) (Endpoint, error) {
+	// On macOS, prefer dns-sd (Bonjour daemon) because pure-Go mDNS browsing
+	// can miss announcements on hosts with complex interface topologies.
+	if runtime.GOOS == "darwin" {
+		if endpoint, err := discoverWithDNSSD(ctx, service, domain); err == nil {
+			return endpoint, nil
+		}
+	}
+
 	browser, err := NewMDBrowser()
 	if err != nil {
 		return Endpoint{}, err

@@ -42,6 +42,9 @@ func TestManagerSubmitAndProcessSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Submit() error: %v", err)
 	}
+	if rec.State != job.StateQueued {
+		t.Fatalf("Submit() state = %s, want %s", rec.State, job.StateQueued)
+	}
 
 	finished := waitForTerminal(t, mgr, rec.ID, 3*time.Second)
 	if finished.State != job.StateSucceeded {
