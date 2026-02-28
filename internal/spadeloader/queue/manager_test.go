@@ -400,10 +400,11 @@ func TestManagerPrunesTerminalJobsOnStartupKeepsNonTerminal(t *testing.T) {
 	hs := history.New(cfg.HistoryPath(), cfg.HistoryLimit)
 	mgr := New(cfg, st, &flasher.FakeFlasher{}, hs)
 
-	startCtx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := mgr.Start(startCtx); err != nil {
-		t.Fatalf("Start() error: %v", err)
+	if err := mgr.recoverJobs(); err != nil {
+		t.Fatalf("recoverJobs() error: %v", err)
+	}
+	if err := mgr.pruneTerminalJobs(); err != nil {
+		t.Fatalf("pruneTerminalJobs() error: %v", err)
 	}
 
 	if _, ok := mgr.Get(oldTerminal.ID); ok {
