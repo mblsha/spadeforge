@@ -298,7 +298,23 @@ func (a *API) handleGetEvents(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(": keepalive\n\n"))
 			flusher.Flush()
 			if rec, ok := a.manager.Get(jobID); !ok || rec.Terminal() {
-				return
+				for {
+					select {
+					case ev, ok := <-ch:
+						if !ok {
+							return
+						}
+						if err := writeSSEEvent(w, ev); err != nil {
+							return
+						}
+						flusher.Flush()
+						if ev.Terminal() {
+							return
+						}
+					default:
+						return
+					}
+				}
 			}
 		case ev, ok := <-ch:
 			if !ok {
