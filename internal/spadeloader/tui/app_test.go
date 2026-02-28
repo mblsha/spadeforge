@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -133,5 +134,50 @@ func TestApplyJobsDedupesByBitstreamIdentity(t *testing.T) {
 	}
 	if m.items[1].ID != "other" {
 		t.Fatalf("items[1].ID = %q, want other", m.items[1].ID)
+	}
+}
+
+func TestAddEventTrimsToMaxLines(t *testing.T) {
+	t.Parallel()
+
+	m, err := newModel(Options{Client: &client.HTTPClient{}})
+	if err != nil {
+		t.Fatalf("newModel() error: %v", err)
+	}
+
+	for i := 0; i < maxEventLines+5; i++ {
+		m.addEvent("event")
+	}
+	if len(m.eventLines) != maxEventLines {
+		t.Fatalf("len(eventLines) = %d, want %d", len(m.eventLines), maxEventLines)
+	}
+}
+
+func TestObserveJobEventsDetectsStateChange(t *testing.T) {
+	t.Parallel()
+
+	m, err := newModel(Options{Client: &client.HTTPClient{}})
+	if err != nil {
+		t.Fatalf("newModel() error: %v", err)
+	}
+	now := time.Now().UTC()
+
+	m.observeJobEvents([]job.Record{
+		{ID: "j1", State: job.StateQueued, CreatedAt: now, Board: "alchitry_au", DesignName: "Blink"},
+	})
+	baseEvents := len(m.eventLines)
+	if baseEvents == 0 {
+		t.Fatalf("expected baseline events after initial observe")
+	}
+
+	m.observeJobEvents([]job.Record{
+		{ID: "j1", State: job.StateRunning, CreatedAt: now, Board: "alchitry_au", DesignName: "Blink"},
+	})
+	if len(m.eventLines) <= baseEvents {
+		t.Fatalf("expected event count to grow on state change")
+	}
+	last := m.eventLines[len(m.eventLines)-1]
+	if !strings.Contains(last, "QUEUED -> RUNNING") {
+		t.Fatalf("last event %q missing state transition", last)
 	}
 }

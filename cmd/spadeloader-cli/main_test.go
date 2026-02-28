@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -62,6 +63,18 @@ func TestResolveServerURL_DiscoverError(t *testing.T) {
 	_, err := resolveServerURL("", true, 200*time.Millisecond, "_spadeloader._tcp", discovery.DefaultDomain)
 	if err == nil {
 		t.Fatalf("expected error")
+	}
+}
+
+func TestRunFlash_MissingRequiredArgsFails(t *testing.T) {
+	t.Parallel()
+
+	err := runFlash([]string{"--discover=false"})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !strings.Contains(err.Error(), "--board, --name, and --bitstream are required") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

@@ -1,12 +1,10 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -54,11 +52,6 @@ func runFlash(args []string) error {
 	tailLines := fs.Int("tail-lines", 60, "print this many console tail lines on failure")
 
 	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	interactive := isInteractiveStdin()
-	if err := promptForMissing(interactive, board, designName, bitstream); err != nil {
 		return err
 	}
 
@@ -230,54 +223,4 @@ func resolveServerURL(
 	}
 	fmt.Printf("discovered server: %s (instance=%s host=%s)\n", endpoint.URL, endpoint.Instance, endpoint.HostName)
 	return endpoint.URL, nil
-}
-
-func isInteractiveStdin() bool {
-	info, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
-}
-
-func promptForMissing(interactive bool, board *string, designName *string, bitstream *string) error {
-	if !interactive {
-		return nil
-	}
-	reader := bufio.NewReader(os.Stdin)
-
-	if strings.TrimSpace(*board) == "" {
-		v, err := promptLine(reader, "FPGA board name")
-		if err != nil {
-			return err
-		}
-		*board = v
-	}
-	if strings.TrimSpace(*designName) == "" {
-		v, err := promptLine(reader, "Design name")
-		if err != nil {
-			return err
-		}
-		*designName = v
-	}
-	if strings.TrimSpace(*bitstream) == "" {
-		v, err := promptLine(reader, "Bitstream path")
-		if err != nil {
-			return err
-		}
-		*bitstream = v
-	}
-	return nil
-}
-
-func promptLine(reader *bufio.Reader, label string) (string, error) {
-	fmt.Printf("%s: ", label)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			return strings.TrimSpace(line), nil
-		}
-		return "", err
-	}
-	return strings.TrimSpace(line), nil
 }
