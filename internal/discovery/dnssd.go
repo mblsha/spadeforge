@@ -106,36 +106,20 @@ func resolveDNSSDEndpointForInstance(ctx context.Context, instance, service, dom
 		return Endpoint{}, err
 	}
 	normalizedHost := normalizeBonjourHost(host)
-
-	var ipv4 []net.IP
-	var ipv6 []net.IP
-	ips, _ := resolveHostWithDNSSD(ctx, normalizedHost)
-	for _, ip := range ips {
-		if ip4 := ip.To4(); ip4 != nil {
-			ipv4 = append(ipv4, ip4)
-		} else {
-			ipv6 = append(ipv6, ip)
-		}
-	}
-
-	ip := pickIP(ipv4, ipv6)
-	if ip != nil {
-		urlHost := ip.String()
-		if ip.To4() == nil {
-			urlHost = "[" + urlHost + "]"
-		}
-		return Endpoint{
-			URL:      fmt.Sprintf("http://%s:%d", urlHost, port),
-			Instance: instance,
-			HostName: normalizedHost,
-			Port:     port,
-		}, nil
-	}
 	if normalizedHost == "" {
 		return Endpoint{}, fmt.Errorf("dns-sd resolved no usable host")
 	}
+
+	urlHost := normalizedHost
+	if ip := net.ParseIP(normalizedHost); ip != nil {
+		if ip.To4() != nil {
+			urlHost = ip.String()
+		} else {
+			urlHost = "[" + ip.String() + "]"
+		}
+	}
 	return Endpoint{
-		URL:      fmt.Sprintf("http://%s:%d", normalizedHost, port),
+		URL:      fmt.Sprintf("http://%s:%d", urlHost, port),
 		Instance: instance,
 		HostName: normalizedHost,
 		Port:     port,
