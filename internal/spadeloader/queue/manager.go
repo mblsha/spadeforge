@@ -112,10 +112,10 @@ func (m *Manager) Submit(_ context.Context, req SubmitRequest) (*job.Record, err
 	m.mu.Lock()
 	m.jobs[id] = rec
 	m.emitEventLocked(rec, "queued")
+	copyRec := *rec
 	m.mu.Unlock()
 
 	m.enqueue(id)
-	copyRec := *rec
 	return &copyRec, nil
 }
 

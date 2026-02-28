@@ -15,12 +15,14 @@ import (
 	"time"
 
 	"github.com/mblsha/spadeforge/internal/discovery"
+	"github.com/mblsha/spadeforge/internal/spadeloader/client"
 	loaderconfig "github.com/mblsha/spadeforge/internal/spadeloader/config"
 	"github.com/mblsha/spadeforge/internal/spadeloader/flasher"
 	"github.com/mblsha/spadeforge/internal/spadeloader/history"
 	"github.com/mblsha/spadeforge/internal/spadeloader/queue"
 	"github.com/mblsha/spadeforge/internal/spadeloader/server"
 	"github.com/mblsha/spadeforge/internal/spadeloader/store"
+	loaderui "github.com/mblsha/spadeforge/internal/spadeloader/tui"
 )
 
 func main() {
@@ -31,12 +33,8 @@ func main() {
 	}
 	switch mode {
 	case "server":
-		if len(args) > 0 {
-			usage()
-			os.Exit(2)
-		}
-		if err := runServer(); err != nil {
-			log.Fatalf("server failed: %v", err)
+		if err := runServerTUI(args); err != nil {
+			log.Fatalf("server+tui failed: %v", err)
 		}
 	case "tui":
 		if err := runTUI(args); err != nil {
@@ -82,8 +80,8 @@ func runServer() error {
 	historyStore := history.New(cfg.HistoryPath(), cfg.HistoryLimit)
 	mgr := queue.New(cfg, st, f, historyStore)
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
+	ctx, stopSignalNotify := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignalNotify()
 
 	if err := mgr.Start(ctx); err != nil {
 		return err
@@ -131,15 +129,165 @@ func runServer() error {
 
 	select {
 	case <-ctx.Done():
+		// Restore default signal behavior so a second Ctrl+C can force termination.
+		stopSignalNotify()
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
-		return httpServer.Shutdown(shutdownCtx)
+		shutdownDone := make(chan error, 1)
+		go func() {
+			shutdownDone <- httpServer.Shutdown(shutdownCtx)
+		}()
+
+		forceStopCh := make(chan os.Signal, 1)
+		signal.Notify(forceStopCh, syscall.SIGINT, syscall.SIGTERM)
+		defer signal.Stop(forceStopCh)
+
+		select {
+		case err := <-shutdownDone:
+			if errors.Is(err, http.ErrServerClosed) || err == nil {
+				return nil
+			}
+			return err
+		case <-forceStopCh:
+			_ = httpServer.Close()
+			err := <-shutdownDone
+			if errors.Is(err, http.ErrServerClosed) || errors.Is(err, context.DeadlineExceeded) || err == nil {
+				return nil
+			}
+			return err
+		case <-shutdownCtx.Done():
+			_ = httpServer.Close()
+			err := <-shutdownDone
+			if errors.Is(err, http.ErrServerClosed) || errors.Is(err, context.DeadlineExceeded) || err == nil {
+				return nil
+			}
+			return err
+		}
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return err
 	}
+}
+
+func runServerTUI(args []string) error {
+	if len(args) > 0 {
+		return fmt.Errorf("server mode does not accept flags; use environment variables for server config")
+	}
+
+	cfg, err := loaderconfig.FromEnv()
+	if err != nil {
+		return err
+	}
+
+	var f flasher.Flasher
+	if cfg.UseFakeFlasher {
+		f = &flasher.FakeFlasher{}
+		log.Printf("using fake flasher")
+	} else {
+		resolvedBin, err := resolveOpenFPGALoaderBin(cfg.OpenFPGALoaderBin)
+		if err != nil {
+			return err
+		}
+		log.Printf("using openFPGALoader binary: %s", resolvedBin)
+		f = flasher.NewOpenFPGALoaderFlasher(resolvedBin)
+	}
+
+	st := store.New(cfg)
+	historyStore := history.New(cfg.HistoryPath(), cfg.HistoryLimit)
+	mgr := queue.New(cfg, st, f, historyStore)
+
+	rootCtx, stopSignalNotify := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignalNotify()
+
+	if err := mgr.Start(rootCtx); err != nil {
+		return err
+	}
+
+	api := server.New(cfg, mgr)
+	httpServer := &http.Server{Addr: cfg.ListenAddr, Handler: api.Handler()}
+
+	var advertiser *discovery.Advertiser
+	if cfg.DiscoveryEnabled {
+		host, port, err := parseListenHostPort(cfg.ListenAddr)
+		if err != nil {
+			log.Printf("discovery advertisement disabled: %v", err)
+		} else if isLoopbackListenHost(host) {
+			log.Printf("discovery advertisement disabled: listen address %q is loopback-only", cfg.ListenAddr)
+		} else {
+			instance := cfg.DiscoveryInstance
+			if instance == "" {
+				instance = hostFallback()
+			}
+			advertiser, err = discovery.StartAdvertiserForListenHost(
+				instance,
+				cfg.DiscoveryService,
+				cfg.DiscoveryDomain,
+				port,
+				[]string{"proto=http", "path=/healthz"},
+				host,
+			)
+			if err != nil {
+				log.Printf("failed to start discovery advertisement: %v", err)
+			} else {
+				log.Printf("discovery advertisement enabled service=%s domain=%s instance=%s port=%d", cfg.DiscoveryService, cfg.DiscoveryDomain, instance, port)
+			}
+		}
+	}
+	if advertiser != nil {
+		defer advertiser.Close()
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		log.Printf("spadeloader server listening on %s", cfg.ListenAddr)
+		errCh <- httpServer.ListenAndServe()
+	}()
+
+	localServerURL, err := localServerURLForClient(cfg.ListenAddr)
+	if err != nil {
+		_ = httpServer.Close()
+		return err
+	}
+
+	uiCtx, cancelUI := context.WithCancel(rootCtx)
+	defer cancelUI()
+	serverErrCh := make(chan error, 1)
+	go func() {
+		err := <-errCh
+		if err == nil || errors.Is(err, http.ErrServerClosed) {
+			return
+		}
+		select {
+		case serverErrCh <- err:
+		default:
+		}
+		cancelUI()
+	}()
+
+	c := &client.HTTPClient{
+		BaseURL:    localServerURL,
+		Token:      cfg.Token,
+		AuthHeader: cfg.AuthHeader,
+	}
+	uiErr := loaderui.Run(uiCtx, loaderui.Options{
+		Client: c,
+		Limit:  cfg.HistoryLimit,
+	})
+
+	_ = httpServer.Close()
+
+	select {
+	case err := <-serverErrCh:
+		return err
+	default:
+	}
+
+	if uiErr != nil && !errors.Is(uiErr, context.Canceled) {
+		return uiErr
+	}
+	return nil
 }
 
 func usage() {
@@ -167,6 +315,29 @@ func parseListenHostPort(listenAddr string) (string, int, error) {
 		return "", 0, err
 	}
 	return strings.TrimSpace(host), port, nil
+}
+
+func localServerURLForClient(listenAddr string) (string, error) {
+	host, port, err := parseListenHostPort(listenAddr)
+	if err != nil {
+		return "", err
+	}
+
+	trimmedHost := strings.TrimSpace(host)
+	if trimmedHost == "" {
+		trimmedHost = "127.0.0.1"
+	}
+	if idx := strings.IndexByte(trimmedHost, '%'); idx >= 0 {
+		trimmedHost = trimmedHost[:idx]
+	}
+	if ip := net.ParseIP(trimmedHost); ip != nil && ip.IsUnspecified() {
+		trimmedHost = "127.0.0.1"
+	}
+	if strings.EqualFold(trimmedHost, "localhost") {
+		trimmedHost = "127.0.0.1"
+	}
+
+	return "http://" + net.JoinHostPort(trimmedHost, fmt.Sprintf("%d", port)), nil
 }
 
 func isLoopbackListenHost(host string) bool {
