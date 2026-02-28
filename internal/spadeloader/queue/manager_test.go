@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -303,6 +305,173 @@ func TestManagerReflashMissingSourceJob(t *testing.T) {
 	if !errors.Is(err, ErrJobNotFound) {
 		t.Fatalf("Reflash() error = %v, want ErrJobNotFound", err)
 	}
+}
+
+func TestManagerPrunesTerminalJobsByHistoryLimit(t *testing.T) {
+	t.Parallel()
+
+	cfg := loaderconfig.Default()
+	cfg.BaseDir = t.TempDir()
+	cfg.WorkerTimeout = 2 * time.Second
+	cfg.HistoryLimit = 2
+
+	st := store.New(cfg)
+	hs := history.New(cfg.HistoryPath(), cfg.HistoryLimit)
+	mgr := New(cfg, st, &flasher.FakeFlasher{}, hs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+
+	var submitted []string
+	for i := 0; i < 4; i++ {
+		rec, err := mgr.Submit(context.Background(), SubmitRequest{
+			Board:         "alchitry_au",
+			DesignName:    "design-" + string(rune('A'+i)),
+			BitstreamName: "design.bit",
+			Bitstream:     bytes.NewBufferString("bitstream-" + string(rune('A'+i))),
+		})
+		if err != nil {
+			t.Fatalf("Submit(%d) error: %v", i, err)
+		}
+		submitted = append(submitted, rec.ID)
+		waitForTerminal(t, mgr, rec.ID, 3*time.Second)
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	items := mgr.ListJobs(10)
+	if len(items) != 2 {
+		t.Fatalf("len(items) = %d, want 2", len(items))
+	}
+	if items[0].ID != submitted[3] {
+		t.Fatalf("items[0].ID = %q, want %q", items[0].ID, submitted[3])
+	}
+	if items[1].ID != submitted[2] {
+		t.Fatalf("items[1].ID = %q, want %q", items[1].ID, submitted[2])
+	}
+
+	prunedIDs := []string{submitted[0], submitted[1]}
+	for _, id := range prunedIDs {
+		if _, ok := mgr.Get(id); ok {
+			t.Fatalf("expected pruned job %s to be absent from manager", id)
+		}
+		if _, err := os.Stat(st.JobDir(id)); !os.IsNotExist(err) {
+			t.Fatalf("expected removed job dir for %s, err=%v", id, err)
+		}
+		if _, err := os.Stat(st.ArtifactsJobDir(id)); !os.IsNotExist(err) {
+			t.Fatalf("expected removed artifacts dir for %s, err=%v", id, err)
+		}
+		mgr.mu.RLock()
+		_, hasEvents := mgr.events[id]
+		_, hasSeq := mgr.nextEventSeq[id]
+		_, hasJob := mgr.jobs[id]
+		mgr.mu.RUnlock()
+		if hasEvents || hasSeq || hasJob {
+			t.Fatalf("expected pruned job %s to be dropped from memory maps", id)
+		}
+	}
+}
+
+func TestManagerPrunesTerminalJobsOnStartupKeepsNonTerminal(t *testing.T) {
+	t.Parallel()
+
+	cfg := loaderconfig.Default()
+	cfg.BaseDir = t.TempDir()
+	cfg.HistoryLimit = 1
+
+	st := store.New(cfg)
+	if err := st.EnsureDirs(); err != nil {
+		t.Fatalf("EnsureDirs() error: %v", err)
+	}
+
+	now := time.Now().UTC()
+	oldTerminal := mustPersistRecord(t, st, newTerminalRecord("old-terminal", job.StateSucceeded, now.Add(-3*time.Minute)))
+	newTerminal := mustPersistRecord(t, st, newTerminalRecord("new-terminal", job.StateFailed, now.Add(-2*time.Minute)))
+	queued := mustPersistRecord(t, st, job.New("queued", job.NewRecordInput{
+		Board:              "alchitry_au",
+		DesignName:         "Queued",
+		BitstreamName:      "queued.bit",
+		BitstreamSHA256:    "sha-queued",
+		BitstreamSizeBytes: 12,
+	}, now.Add(-time.Minute)))
+
+	hs := history.New(cfg.HistoryPath(), cfg.HistoryLimit)
+	mgr := New(cfg, st, &flasher.FakeFlasher{}, hs)
+
+	startCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := mgr.Start(startCtx); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+
+	if _, ok := mgr.Get(oldTerminal.ID); ok {
+		t.Fatalf("expected old terminal job to be pruned on startup")
+	}
+	if _, ok := mgr.Get(newTerminal.ID); !ok {
+		t.Fatalf("expected newest terminal job to be retained")
+	}
+	if rec, ok := mgr.Get(queued.ID); !ok || rec.State != job.StateQueued {
+		t.Fatalf("expected queued job to be retained, got ok=%v state=%v", ok, rec.State)
+	}
+
+	if _, err := os.Stat(st.JobDir(oldTerminal.ID)); !os.IsNotExist(err) {
+		t.Fatalf("expected old terminal job dir removed, err=%v", err)
+	}
+	if _, err := os.Stat(st.JobDir(newTerminal.ID)); err != nil {
+		t.Fatalf("expected newest terminal job dir retained, err=%v", err)
+	}
+	if _, err := os.Stat(st.JobDir(queued.ID)); err != nil {
+		t.Fatalf("expected queued job dir retained, err=%v", err)
+	}
+}
+
+func mustPersistRecord(t *testing.T, st *store.Store, rec *job.Record) *job.Record {
+	t.Helper()
+	if err := st.CreateJobLayout(rec.ID); err != nil {
+		t.Fatalf("CreateJobLayout(%s) error: %v", rec.ID, err)
+	}
+	if err := os.WriteFile(st.RequestBitstreamPath(rec.ID), []byte("bitstream"), 0o644); err != nil {
+		t.Fatalf("write request bitstream for %s: %v", rec.ID, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(st.ConsoleLogPath(rec.ID)), 0o755); err != nil {
+		t.Fatalf("ensure console log dir for %s: %v", rec.ID, err)
+	}
+	if err := os.WriteFile(st.ConsoleLogPath(rec.ID), []byte("console log"), 0o644); err != nil {
+		t.Fatalf("write console log for %s: %v", rec.ID, err)
+	}
+	if err := st.Save(rec); err != nil {
+		t.Fatalf("Save(%s) error: %v", rec.ID, err)
+	}
+	return rec
+}
+
+func newTerminalRecord(id string, state job.State, created time.Time) *job.Record {
+	createdUTC := created.UTC()
+	rec := job.New(id, job.NewRecordInput{
+		Board:              "alchitry_au",
+		DesignName:         strings.TrimSpace(id),
+		BitstreamName:      id + ".bit",
+		BitstreamSHA256:    "sha-" + id,
+		BitstreamSizeBytes: 16,
+	}, createdUTC)
+	started := createdUTC.Add(1 * time.Second)
+	finished := createdUTC.Add(2 * time.Second)
+	exitCode := 0
+	if state == job.StateFailed {
+		exitCode = 1
+		rec.Error = "failed"
+	}
+	rec.State = state
+	rec.Message = "terminal"
+	rec.CurrentStep = "done"
+	rec.StartedAt = &started
+	rec.FinishedAt = &finished
+	rec.HeartbeatAt = &finished
+	rec.UpdatedAt = finished
+	rec.ExitCode = &exitCode
+	return rec
 }
 
 func waitForTerminal(t *testing.T, mgr *Manager, jobID string, timeout time.Duration) *job.Record {
