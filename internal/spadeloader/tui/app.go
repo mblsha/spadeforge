@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -16,6 +17,7 @@ const (
 	defaultLimit           = 100
 	defaultRefreshInterval = 1500 * time.Millisecond
 	defaultReflashTimeout  = 30 * time.Second
+	maxEventLines          = 25
 )
 
 type Options struct {
@@ -32,6 +34,15 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	p := tea.NewProgram(model, tea.WithContext(ctx), tea.WithAltScreen())
 	_, err = p.Run()
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, tea.ErrInterrupted) {
+		return nil
+	}
+	if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, tea.ErrProgramKilled)) {
+		return nil
+	}
 	return err
 }
 
@@ -67,6 +78,9 @@ type model struct {
 	reflashing bool
 	status     string
 	lastErr    string
+
+	eventLines    []string
+	lastJobStates map[string]job.State
 }
 
 func newModel(opts Options) (model, error) {
@@ -92,6 +106,7 @@ func newModel(opts Options) (model, error) {
 		reflashTimeout:  reflashTimeout,
 		loading:         true,
 		status:          "loading bitstreams...",
+		lastJobStates:   map[string]job.State{},
 	}, nil
 }
 
@@ -113,9 +128,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.err != nil {
 			m.lastErr = typed.err.Error()
 			m.status = "refresh failed"
+			m.addEvent("refresh failed: " + typed.err.Error())
 			return m, nil
 		}
 		m.lastErr = ""
+		m.observeJobEvents(typed.items)
 		m.applyJobs(typed.items)
 		if m.reflashing {
 			m.status = "submitting reflash..."
@@ -128,11 +145,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.err != nil {
 			m.lastErr = typed.err.Error()
 			m.status = "reflash failed"
+			m.addEvent("reflash failed: " + typed.err.Error())
 			return m, nil
 		}
 		m.lastErr = ""
 		m.pendingID = typed.newJobID
 		m.status = fmt.Sprintf("reflash submitted: %s", typed.newJobID)
+		m.addEvent("reflash submitted: " + shortID(typed.newJobID))
 		m.loading = true
 		return m, m.fetchJobsCmd()
 	case tea.KeyMsg:
@@ -159,6 +178,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.reflashing = true
 			m.status = fmt.Sprintf("reflashing %s | %s ...", selected.Board, selected.DesignName)
 			m.lastErr = ""
+			m.addEvent(fmt.Sprintf("reflash requested for %s | %s", selected.Board, selected.DesignName))
 			return m, m.reflashCmd(selected.ID)
 		}
 	}
@@ -177,6 +197,7 @@ func (m model) View() string {
 		} else {
 			b.WriteString("\nNo bitstreams yet.\n")
 		}
+		m.writeEventSection(&b)
 		return b.String()
 	}
 
@@ -200,6 +221,7 @@ func (m model) View() string {
 		b.WriteString(trimToWidth(line, m.width))
 		b.WriteByte('\n')
 	}
+	m.writeEventSection(&b)
 	return b.String()
 }
 
@@ -276,9 +298,9 @@ type rowWindow struct {
 }
 
 func (m model) visibleRows() rowWindow {
-	maxRows := m.height - 5
+	maxRows := m.height - 6 - m.eventRowsLimit()
 	if maxRows <= 0 {
-		maxRows = len(m.items)
+		maxRows = 1
 	}
 	if maxRows > len(m.items) {
 		maxRows = len(m.items)
@@ -306,6 +328,89 @@ func (m model) statusLine() string {
 		return ""
 	}
 	return strings.Join(parts, " | ")
+}
+
+func (m *model) addEvent(message string) {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return
+	}
+	line := fmt.Sprintf("%s  %s", time.Now().Local().Format("15:04:05"), trimmed)
+	m.eventLines = append(m.eventLines, line)
+	if len(m.eventLines) > maxEventLines {
+		m.eventLines = m.eventLines[len(m.eventLines)-maxEventLines:]
+	}
+}
+
+func (m *model) observeJobEvents(items []job.Record) {
+	if m.lastJobStates == nil {
+		m.lastJobStates = map[string]job.State{}
+	}
+	if len(m.lastJobStates) == 0 {
+		next := make(map[string]job.State, len(items))
+		for _, rec := range items {
+			next[rec.ID] = rec.State
+		}
+		m.lastJobStates = next
+		if len(items) > 0 {
+			m.addEvent(fmt.Sprintf("loaded %d jobs from server", len(items)))
+		}
+		return
+	}
+
+	next := make(map[string]job.State, len(items))
+	for _, rec := range items {
+		next[rec.ID] = rec.State
+		prevState, seen := m.lastJobStates[rec.ID]
+		if !seen {
+			m.addEvent(fmt.Sprintf("new job %s %s | %s", shortID(rec.ID), rec.Board, rec.DesignName))
+			continue
+		}
+		if prevState != rec.State {
+			m.addEvent(fmt.Sprintf("job %s %s -> %s", shortID(rec.ID), prevState, rec.State))
+		}
+	}
+	m.lastJobStates = next
+}
+
+func (m model) eventRowsLimit() int {
+	if m.height <= 0 {
+		return maxEventLines
+	}
+	minListRows := 5
+	available := m.height - 6 - minListRows
+	if available < 0 {
+		available = 0
+	}
+	if available > maxEventLines {
+		available = maxEventLines
+	}
+	return available
+}
+
+func (m model) writeEventSection(b *strings.Builder) {
+	b.WriteString(trimToWidth(strings.Repeat("-", 120), m.width))
+	b.WriteByte('\n')
+	b.WriteString(trimToWidth("Events (latest 25)", m.width))
+	b.WriteByte('\n')
+
+	rows := m.eventRowsLimit()
+	if rows <= 0 {
+		return
+	}
+	if len(m.eventLines) == 0 {
+		b.WriteString(trimToWidth("(no events yet)", m.width))
+		b.WriteByte('\n')
+		return
+	}
+	start := len(m.eventLines) - rows
+	if start < 0 {
+		start = 0
+	}
+	for i := start; i < len(m.eventLines); i++ {
+		b.WriteString(trimToWidth(m.eventLines[i], m.width))
+		b.WriteByte('\n')
+	}
 }
 
 func (m model) fetchJobsCmd() tea.Cmd {

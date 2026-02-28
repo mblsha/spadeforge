@@ -118,7 +118,7 @@ func runServer() error {
 		}
 	}
 	if advertiser != nil {
-		defer advertiser.Close()
+		defer closeAdvertiserWithTimeout(advertiser, 1500*time.Millisecond)
 	}
 
 	errCh := make(chan error, 1)
@@ -198,8 +198,10 @@ func runServerTUI(args []string) error {
 	historyStore := history.New(cfg.HistoryPath(), cfg.HistoryLimit)
 	mgr := queue.New(cfg, st, f, historyStore)
 
-	rootCtx, stopSignalNotify := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	signalCtx, stopSignalNotify := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stopSignalNotify()
+	rootCtx, cancelRoot := context.WithCancel(signalCtx)
+	defer cancelRoot()
 
 	if err := mgr.Start(rootCtx); err != nil {
 		return err
@@ -236,7 +238,7 @@ func runServerTUI(args []string) error {
 		}
 	}
 	if advertiser != nil {
-		defer advertiser.Close()
+		defer closeAdvertiserWithTimeout(advertiser, 1500*time.Millisecond)
 	}
 
 	errCh := make(chan error, 1)
@@ -276,6 +278,8 @@ func runServerTUI(args []string) error {
 		Limit:  cfg.HistoryLimit,
 	})
 
+	// Ensure worker contexts and in-flight operations are canceled when the UI exits.
+	cancelRoot()
 	_ = httpServer.Close()
 
 	select {
@@ -367,4 +371,24 @@ func resolveOpenFPGALoaderBin(bin string) (string, error) {
 		return "", fmt.Errorf("find openFPGALoader binary %q: %w", trimmed, err)
 	}
 	return path, nil
+}
+
+func closeAdvertiserWithTimeout(advertiser *discovery.Advertiser, timeout time.Duration) {
+	if advertiser == nil {
+		return
+	}
+	if timeout <= 0 {
+		timeout = time.Second
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		advertiser.Close()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		log.Printf("discovery advertiser close timed out after %s", timeout)
+	}
 }
