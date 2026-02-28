@@ -126,6 +126,23 @@ func (s *Store) RemoveWorkDir(jobID string) error {
 	return os.RemoveAll(s.WorkJobDir(jobID))
 }
 
+func (s *Store) RemoveJobData(jobID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	paths := []string{
+		s.JobDir(jobID),
+		s.ArtifactsJobDir(jobID),
+		s.WorkJobDir(jobID),
+	}
+	for _, p := range paths {
+		if err := os.RemoveAll(p); err != nil {
+			return fmt.Errorf("remove job path %q: %w", p, err)
+		}
+	}
+	return nil
+}
+
 func (s *Store) JobDir(jobID string) string {
 	return filepath.Join(s.cfg.JobsDir(), jobID)
 }

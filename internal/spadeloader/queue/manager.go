@@ -74,6 +74,9 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err := m.recoverJobs(); err != nil {
 		return err
 	}
+	if err := m.pruneTerminalJobs(); err != nil {
+		log.Printf("failed to prune terminal jobs on startup: %v", err)
+	}
 
 	m.once.Do(func() {
 		go m.worker(ctx)
@@ -305,6 +308,7 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 	}
 	jobID := rec.ID
 	preserveWorkDir := m.cfg.PreserveWorkDir
+	pruneIDs := m.pruneTerminalJobsLocked()
 	m.mu.Unlock()
 
 	if err := m.history.Append(historyItem); err != nil {
@@ -313,6 +317,9 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 
 	if !preserveWorkDir {
 		_ = m.store.RemoveWorkDir(jobID)
+	}
+	if err := m.removeJobsFromDisk(pruneIDs); err != nil {
+		log.Printf("[spadeloader job %s] failed to prune retained jobs: %v", jobID, err)
 	}
 }
 
@@ -470,4 +477,72 @@ func publishEvent(ch chan job.Event, ev job.Event) {
 	case ch <- ev:
 	default:
 	}
+}
+
+type terminalJobRef struct {
+	id        string
+	createdAt time.Time
+}
+
+func (m *Manager) pruneTerminalJobs() error {
+	m.mu.Lock()
+	pruneIDs := m.pruneTerminalJobsLocked()
+	m.mu.Unlock()
+	return m.removeJobsFromDisk(pruneIDs)
+}
+
+func (m *Manager) pruneTerminalJobsLocked() []string {
+	limit := m.cfg.HistoryLimit
+	if limit <= 0 {
+		return nil
+	}
+
+	terminal := make([]terminalJobRef, 0, len(m.jobs))
+	for id, rec := range m.jobs {
+		if rec == nil || !rec.Terminal() {
+			continue
+		}
+		terminal = append(terminal, terminalJobRef{
+			id:        id,
+			createdAt: rec.CreatedAt,
+		})
+	}
+	if len(terminal) <= limit {
+		return nil
+	}
+
+	sort.Slice(terminal, func(i, j int) bool {
+		if terminal[i].createdAt.Equal(terminal[j].createdAt) {
+			return terminal[i].id > terminal[j].id
+		}
+		return terminal[i].createdAt.After(terminal[j].createdAt)
+	})
+
+	pruneIDs := make([]string, 0, len(terminal)-limit)
+	for _, doomed := range terminal[limit:] {
+		pruneIDs = append(pruneIDs, doomed.id)
+		m.dropJobLocked(doomed.id)
+	}
+	return pruneIDs
+}
+
+func (m *Manager) dropJobLocked(jobID string) {
+	if subs := m.subscribers[jobID]; subs != nil {
+		for ch := range subs {
+			close(ch)
+		}
+		delete(m.subscribers, jobID)
+	}
+	delete(m.events, jobID)
+	delete(m.nextEventSeq, jobID)
+	delete(m.jobs, jobID)
+}
+
+func (m *Manager) removeJobsFromDisk(jobIDs []string) error {
+	for _, jobID := range jobIDs {
+		if err := m.store.RemoveJobData(jobID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
