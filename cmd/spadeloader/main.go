@@ -97,6 +97,7 @@ func runServerTUI(args []string) error {
 	httpServer := &http.Server{Addr: cfg.ListenAddr, Handler: api.Handler()}
 
 	var advertiser *discovery.Advertiser
+	advertisePrimaryAddr := ""
 	if cfg.DiscoveryEnabled {
 		host, port, err := parseListenHostPort(cfg.ListenAddr)
 		if err != nil {
@@ -104,6 +105,11 @@ func runServerTUI(args []string) error {
 		} else if isLoopbackListenHost(host) {
 			log.Printf("discovery advertisement disabled: listen address %q is loopback-only", cfg.ListenAddr)
 		} else {
+			primaryAddr, primaryErr := discovery.PrimaryAdvertiseAddrForListenHost(host, port)
+			if primaryErr != nil {
+				log.Printf("discovery advertisement primary address unavailable: %v", primaryErr)
+			}
+
 			instance := cfg.DiscoveryInstance
 			if instance == "" {
 				instance = hostFallback()
@@ -119,7 +125,12 @@ func runServerTUI(args []string) error {
 			if err != nil {
 				log.Printf("failed to start discovery advertisement: %v", err)
 			} else {
-				log.Printf("discovery advertisement enabled service=%s domain=%s instance=%s port=%d", cfg.DiscoveryService, cfg.DiscoveryDomain, instance, port)
+				advertisePrimaryAddr = primaryAddr
+				if strings.TrimSpace(advertisePrimaryAddr) == "" {
+					log.Printf("discovery advertisement enabled service=%s domain=%s instance=%s port=%d", cfg.DiscoveryService, cfg.DiscoveryDomain, instance, port)
+				} else {
+					log.Printf("discovery advertisement enabled service=%s domain=%s instance=%s primary=%s", cfg.DiscoveryService, cfg.DiscoveryDomain, instance, advertisePrimaryAddr)
+				}
 			}
 		}
 	}
@@ -160,8 +171,9 @@ func runServerTUI(args []string) error {
 		AuthHeader: cfg.AuthHeader,
 	}
 	uiErr := loaderui.Run(uiCtx, loaderui.Options{
-		Client: c,
-		Limit:  cfg.HistoryLimit,
+		Client:               c,
+		Limit:                cfg.HistoryLimit,
+		AdvertisePrimaryAddr: advertisePrimaryAddr,
 	})
 
 	// Ensure worker contexts and in-flight operations are canceled when the UI exits.

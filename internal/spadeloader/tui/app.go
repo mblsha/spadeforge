@@ -21,10 +21,11 @@ const (
 )
 
 type Options struct {
-	Client          *client.HTTPClient
-	Limit           int
-	RefreshInterval time.Duration
-	ReflashTimeout  time.Duration
+	Client               *client.HTTPClient
+	Limit                int
+	RefreshInterval      time.Duration
+	ReflashTimeout       time.Duration
+	AdvertisePrimaryAddr string
 }
 
 func Run(ctx context.Context, opts Options) error {
@@ -61,9 +62,10 @@ type reflashResultMsg struct {
 type model struct {
 	client *client.HTTPClient
 
-	limit           int
-	refreshInterval time.Duration
-	reflashTimeout  time.Duration
+	limit                int
+	refreshInterval      time.Duration
+	reflashTimeout       time.Duration
+	advertisePrimaryAddr string
 
 	items []job.Record
 
@@ -100,13 +102,14 @@ func newModel(opts Options) (model, error) {
 		reflashTimeout = defaultReflashTimeout
 	}
 	return model{
-		client:          opts.Client,
-		limit:           limit,
-		refreshInterval: refresh,
-		reflashTimeout:  reflashTimeout,
-		loading:         true,
-		status:          "loading bitstreams...",
-		lastJobStates:   map[string]job.State{},
+		client:               opts.Client,
+		limit:                limit,
+		refreshInterval:      refresh,
+		reflashTimeout:       reflashTimeout,
+		advertisePrimaryAddr: strings.TrimSpace(opts.AdvertisePrimaryAddr),
+		loading:              true,
+		status:               "loading bitstreams...",
+		lastJobStates:        map[string]job.State{},
 	}, nil
 }
 
@@ -187,8 +190,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	var b strings.Builder
-	b.WriteString("Spadeloader TUI - Bitstreams (newest first)\n")
-	b.WriteString("Keys: j/k or arrows move  enter reflash  r refresh  q quit\n")
+	b.WriteString(trimToWidth("Spadeloader TUI - Bitstreams (newest first)", m.width))
+	b.WriteByte('\n')
+	if strings.TrimSpace(m.advertisePrimaryAddr) != "" {
+		b.WriteString(trimToWidth("Zeroconf primary: "+m.advertisePrimaryAddr, m.width))
+		b.WriteByte('\n')
+	}
+	b.WriteString(trimToWidth("Keys: j/k or arrows move  enter reflash  r refresh  q quit", m.width))
+	b.WriteByte('\n')
 	b.WriteString(m.statusLine())
 	b.WriteString("\n")
 	if len(m.items) == 0 {

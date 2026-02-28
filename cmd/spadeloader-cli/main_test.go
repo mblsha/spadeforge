@@ -66,6 +66,52 @@ func TestResolveServerURL_DiscoverError(t *testing.T) {
 	}
 }
 
+func TestPrimaryIPPortFromURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		rawURL string
+		want   string
+	}{
+		{
+			name:   "ipv4",
+			rawURL: "http://10.0.0.9:8080",
+			want:   "10.0.0.9:8080",
+		},
+		{
+			name:   "ipv6",
+			rawURL: "http://[fe80::1]:8080",
+			want:   "[fe80::1]:8080",
+		},
+		{
+			name:   "hostname is not ip",
+			rawURL: "http://loader.local:8080",
+			want:   "",
+		},
+		{
+			name:   "invalid url",
+			rawURL: "://bad",
+			want:   "",
+		},
+		{
+			name:   "missing port",
+			rawURL: "http://10.0.0.9",
+			want:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := primaryIPPortFromURL(tt.rawURL); got != tt.want {
+				t.Fatalf("primaryIPPortFromURL(%q) = %q, want %q", tt.rawURL, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRunFlash_MissingRequiredArgsFails(t *testing.T) {
 	t.Parallel()
 

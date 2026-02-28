@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,6 +223,28 @@ func resolveServerURL(
 	if err != nil {
 		return "", fmt.Errorf("discover server via mDNS: %w", err)
 	}
-	fmt.Printf("discovered server: %s (instance=%s host=%s)\n", endpoint.URL, endpoint.Instance, endpoint.HostName)
+	primaryAddr := primaryIPPortFromURL(endpoint.URL)
+	if primaryAddr == "" {
+		primaryAddr = "unknown"
+	}
+	fmt.Printf("discovered server: %s (primary=%s instance=%s host=%s)\n", endpoint.URL, primaryAddr, endpoint.Instance, endpoint.HostName)
 	return endpoint.URL, nil
+}
+
+func primaryIPPortFromURL(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	if parsed.Host == "" {
+		return ""
+	}
+	host, port, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		return ""
+	}
+	if ip := net.ParseIP(host); ip == nil {
+		return ""
+	}
+	return net.JoinHostPort(host, port)
 }
