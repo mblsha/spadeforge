@@ -5,6 +5,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -26,9 +27,10 @@ type Manager struct {
 	store   *store.Store
 	builder builder.Builder
 
-	mu    sync.RWMutex
-	jobs  map[string]*job.Record
-	queue chan string
+	mu      sync.RWMutex
+	jobs    map[string]*job.Record
+	queue   chan string
+	cancels map[string]context.CancelFunc
 
 	events          map[string][]job.Event
 	nextEventSeq    map[string]int64
@@ -46,6 +48,7 @@ func New(cfg config.Config, st *store.Store, b builder.Builder) *Manager {
 		builder:         b,
 		jobs:            map[string]*job.Record{},
 		queue:           make(chan string, 4096),
+		cancels:         map[string]context.CancelFunc{},
 		events:          map[string][]job.Event{},
 		nextEventSeq:    map[string]int64{},
 		subscribers:     map[string]map[chan job.Event]struct{}{},
@@ -137,6 +140,24 @@ func (m *Manager) Get(jobID string) (*job.Record, bool) {
 	return &copyRec, true
 }
 
+func (m *Manager) KillJob(jobID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rec, ok := m.jobs[jobID]
+	if !ok {
+		return os.ErrNotExist
+	}
+	if rec.Terminal() {
+		return fmt.Errorf("job %s is already in terminal state %s", jobID, rec.State)
+	}
+	cancel, ok := m.cancels[jobID]
+	if !ok {
+		return fmt.Errorf("job %s is queued but not yet running", jobID)
+	}
+	cancel()
+	return nil
+}
+
 func (m *Manager) DownloadArtifacts(jobID string, w io.Writer) error {
 	rec, ok := m.Get(jobID)
 	if !ok {
@@ -226,6 +247,10 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 	ctx, cancel := context.WithTimeout(parentCtx, m.cfg.WorkerTimeout)
 	defer cancel()
 
+	m.mu.Lock()
+	m.cancels[id] = cancel
+	m.mu.Unlock()
+
 	result, buildErr := m.builder.Build(ctx, builder.BuildJob{
 		ID:           rec.ID,
 		WorkDir:      m.store.WorkJobDir(rec.ID),
@@ -249,6 +274,7 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 	_ = m.writeArtifactManifest(rec.ID, finalState, result, diagReport, failureKind, failureSummary)
 
 	m.mu.Lock()
+	delete(m.cancels, id)
 	rec, ok = m.jobs[id]
 	if !ok {
 		m.mu.Unlock()
@@ -268,7 +294,9 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 		rec.FailureKind = failureKind
 		rec.FailureSummary = failureSummary
 		rec.CurrentStep = "failed"
-		if failureKind != "" {
+		if errors.Is(buildErr, context.Canceled) {
+			terminalLog = fmt.Sprintf("[job %s] killed (context canceled)", id)
+		} else if failureKind != "" {
 			terminalLog = fmt.Sprintf(
 				"[job %s] failed kind=%s summary=%q message=%q error=%v",
 				id,

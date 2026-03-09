@@ -42,6 +42,7 @@ func (a *API) routes() {
 	a.mux.Handle("GET /v1/jobs/{id}/tail", a.guard(http.HandlerFunc(a.handleGetTail)))
 	a.mux.Handle("GET /v1/jobs/{id}/diagnostics", a.guard(http.HandlerFunc(a.handleGetDiagnostics)))
 	a.mux.Handle("GET /v1/jobs/{id}/events", a.guard(http.HandlerFunc(a.handleGetEvents)))
+	a.mux.Handle("POST /v1/jobs/{id}/kill", a.guard(http.HandlerFunc(a.handleKillJob)))
 }
 
 func (a *API) guard(next http.Handler) http.Handler {
@@ -201,6 +202,19 @@ func (a *API) handleGetDiagnostics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(raw)
+}
+
+func (a *API) handleKillJob(w http.ResponseWriter, r *http.Request) {
+	jobID := r.PathValue("id")
+	if err := a.manager.KillJob(jobID); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, os.ErrNotExist) {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "kill signal sent"})
 }
 
 func (a *API) handleGetEvents(w http.ResponseWriter, r *http.Request) {

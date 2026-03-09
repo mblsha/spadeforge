@@ -145,6 +145,24 @@ func (c *HTTPClient) DownloadArtifacts(ctx context.Context, jobID string, out io
 	return err
 }
 
+func (c *HTTPClient) KillJob(ctx context.Context, jobID string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.buildURL(path.Join("/v1/jobs", jobID, "kill")), nil)
+	if err != nil {
+		return err
+	}
+	c.setAuth(req)
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		raw, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("kill failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	return nil
+}
+
 func (c *HTTPClient) GetDiagnostics(ctx context.Context, jobID string) (*job.DiagnosticsReport, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.buildURL(path.Join("/v1/jobs", jobID, "diagnostics")), nil)
 	if err != nil {

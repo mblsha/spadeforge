@@ -22,12 +22,49 @@ var discoverFn = discovery.Discover
 
 func main() {
 	args := os.Args[1:]
+	if len(args) > 0 && args[0] == "kill" {
+		if err := runKill(args[1:]); err != nil {
+			log.Fatalf("kill failed: %v", err)
+		}
+		return
+	}
 	if len(args) > 0 && args[0] == "submit" {
 		args = args[1:]
 	}
 	if err := runSubmit(args); err != nil {
 		log.Fatalf("submit failed: %v", err)
 	}
+}
+
+func runKill(args []string) error {
+	fs := flag.NewFlagSet("spadeforge-cli kill", flag.ContinueOnError)
+	serverURL := fs.String("server", defaultString(os.Getenv("SPADEFORGE_SERVER"), ""), "builder server base url (if empty, auto-discover)")
+	discoverEnabled := fs.Bool("discover", true, "auto-discover server when --server is not provided")
+	discoverTimeout := fs.Duration("discover-timeout", 2*time.Second, "mDNS auto-discovery timeout")
+	discoverService := fs.String("discover-service", discovery.DefaultServiceName, "mDNS service name used for discovery")
+	discoverDomain := fs.String("discover-domain", discovery.DefaultDomain, "mDNS discovery domain")
+	token := fs.String("token", strings.TrimSpace(os.Getenv("SPADEFORGE_TOKEN")), "auth token")
+	authHeader := fs.String("auth-header", defaultString(os.Getenv("SPADEFORGE_AUTH_HEADER"), "X-Build-Token"), "auth header")
+	jobID := fs.String("job-id", "", "job ID to kill (required)")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*jobID) == "" {
+		return fmt.Errorf("--job-id is required")
+	}
+
+	resolvedServerURL, err := resolveServerURL(*serverURL, *discoverEnabled, *discoverTimeout, *discoverService, *discoverDomain)
+	if err != nil {
+		return err
+	}
+
+	c := &client.HTTPClient{BaseURL: resolvedServerURL, Token: *token, AuthHeader: *authHeader}
+	if err := c.KillJob(context.Background(), *jobID); err != nil {
+		return err
+	}
+	fmt.Printf("kill signal sent to job %s\n", *jobID)
+	return nil
 }
 
 func runSubmit(args []string) error {

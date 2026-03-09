@@ -32,6 +32,15 @@ func (OSRunner) Run(ctx context.Context, spec CommandSpec, stdout, stderr io.Wri
 	cmd.Dir = spec.Dir
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	if runtime.GOOS == "windows" {
+		// exec.CommandContext only calls TerminateProcess on the direct child
+		// (cmd.exe), leaving vivado.exe as an orphan. Override Cancel to use
+		// taskkill /F /T which kills the entire process tree.
+		cmd.Cancel = func() error {
+			return exec.Command("taskkill", "/F", "/T", "/PID",
+				fmt.Sprint(cmd.Process.Pid)).Run()
+		}
+	}
 	err := cmd.Run()
 	if err == nil {
 		return 0, nil
