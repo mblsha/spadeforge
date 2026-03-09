@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +45,7 @@ func (a *API) routes() {
 	a.mux.Handle("GET /v1/jobs/{id}/diagnostics", a.guard(http.HandlerFunc(a.handleGetDiagnostics)))
 	a.mux.Handle("GET /v1/jobs/{id}/events", a.guard(http.HandlerFunc(a.handleGetEvents)))
 	a.mux.Handle("POST /v1/jobs/{id}/kill", a.guard(http.HandlerFunc(a.handleKillJob)))
+	a.mux.Handle("POST /v1/kill-all-vivado", a.guard(http.HandlerFunc(a.handleKillAllVivado)))
 }
 
 func (a *API) guard(next http.Handler) http.Handler {
@@ -202,6 +205,23 @@ func (a *API) handleGetDiagnostics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(raw)
+}
+
+func (a *API) handleKillAllVivado(w http.ResponseWriter, _ *http.Request) {
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("taskkill", "/F", "/IM", "vivado.exe", "/T")
+	} else {
+		cmd = exec.Command("pkill", "-9", "vivado")
+	}
+	out, err := cmd.CombinedOutput()
+	msg := strings.TrimSpace(string(out))
+	if err != nil {
+		// taskkill/pkill exit non-zero when no matching process is found; treat that as "none running".
+		writeJSON(w, http.StatusOK, map[string]string{"status": "no vivado processes found", "detail": msg})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "killed", "detail": msg})
 }
 
 func (a *API) handleKillJob(w http.ResponseWriter, r *http.Request) {

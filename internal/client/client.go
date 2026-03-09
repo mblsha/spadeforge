@@ -163,6 +163,30 @@ func (c *HTTPClient) KillJob(ctx context.Context, jobID string) error {
 	return nil
 }
 
+func (c *HTTPClient) KillAllVivado(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.buildURL("/v1/kill-all-vivado"), nil)
+	if err != nil {
+		return "", err
+	}
+	c.setAuth(req)
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var payload struct {
+		Status string `json:"status"`
+		Detail string `json:"detail"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("kill-all-vivado failed: %s", payload.Detail)
+	}
+	return payload.Status + ": " + payload.Detail, nil
+}
+
 func (c *HTTPClient) GetDiagnostics(ctx context.Context, jobID string) (*job.DiagnosticsReport, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.buildURL(path.Join("/v1/jobs", jobID, "diagnostics")), nil)
 	if err != nil {
