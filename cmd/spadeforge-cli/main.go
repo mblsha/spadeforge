@@ -28,12 +28,46 @@ func main() {
 		}
 		return
 	}
+	if len(args) > 0 && args[0] == "kill-all-vivado" {
+		if err := runKillAllVivado(args[1:]); err != nil {
+			log.Fatalf("kill-all-vivado failed: %v", err)
+		}
+		return
+	}
 	if len(args) > 0 && args[0] == "submit" {
 		args = args[1:]
 	}
 	if err := runSubmit(args); err != nil {
 		log.Fatalf("submit failed: %v", err)
 	}
+}
+
+func runKillAllVivado(args []string) error {
+	fs := flag.NewFlagSet("spadeforge-cli kill-all-vivado", flag.ContinueOnError)
+	serverURL := fs.String("server", defaultString(os.Getenv("SPADEFORGE_SERVER"), ""), "builder server base url (if empty, auto-discover)")
+	discoverEnabled := fs.Bool("discover", true, "auto-discover server when --server is not provided")
+	discoverTimeout := fs.Duration("discover-timeout", 2*time.Second, "mDNS auto-discovery timeout")
+	discoverService := fs.String("discover-service", discovery.DefaultServiceName, "mDNS service name used for discovery")
+	discoverDomain := fs.String("discover-domain", discovery.DefaultDomain, "mDNS discovery domain")
+	token := fs.String("token", strings.TrimSpace(os.Getenv("SPADEFORGE_TOKEN")), "auth token")
+	authHeader := fs.String("auth-header", defaultString(os.Getenv("SPADEFORGE_AUTH_HEADER"), "X-Build-Token"), "auth header")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	resolvedServerURL, err := resolveServerURL(*serverURL, *discoverEnabled, *discoverTimeout, *discoverService, *discoverDomain)
+	if err != nil {
+		return err
+	}
+
+	c := &client.HTTPClient{BaseURL: resolvedServerURL, Token: *token, AuthHeader: *authHeader}
+	result, err := c.KillAllVivado(context.Background())
+	if err != nil {
+		return err
+	}
+	fmt.Println(result)
+	return nil
 }
 
 func runKill(args []string) error {
