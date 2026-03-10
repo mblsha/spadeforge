@@ -264,6 +264,44 @@ func TestWorker_ProgressStepAndHeartbeat(t *testing.T) {
 	}
 }
 
+func TestStartJobLocked_RegistersCancelBeforeRunningIsExposed(t *testing.T) {
+	cfg := testConfig(t)
+	st := store.New(cfg)
+	mgr := New(cfg, st, &builder.FakeBuilder{})
+
+	rec := job.New("job1", manifest.Manifest{
+		Project: "demo",
+		Top:     "top",
+		Part:    "xc7a35tcsg324-1",
+		Sources: []string{"hdl/spade.sv"},
+	}, time.Now())
+	cancelCalled := false
+	cancel := func() {
+		cancelCalled = true
+	}
+
+	mgr.mu.Lock()
+	err := mgr.startJobLocked(rec, time.Now(), cancel)
+	registeredCancel, ok := mgr.cancels[rec.ID]
+	mgr.mu.Unlock()
+	if err != nil {
+		t.Fatalf("startJobLocked failed: %v", err)
+	}
+	if rec.State != job.StateRunning {
+		t.Fatalf("expected RUNNING, got %s", rec.State)
+	}
+	if rec.CurrentStep != "launch" {
+		t.Fatalf("expected launch step, got %q", rec.CurrentStep)
+	}
+	if !ok || registeredCancel == nil {
+		t.Fatalf("expected cancel handle to be registered")
+	}
+	registeredCancel()
+	if !cancelCalled {
+		t.Fatalf("expected registered cancel to invoke original cancel func")
+	}
+}
+
 func TestWorker_LogsProjectName(t *testing.T) {
 	cfg := testConfig(t)
 	st := store.New(cfg)

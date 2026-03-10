@@ -225,6 +225,9 @@ func (m *Manager) worker(ctx context.Context) {
 }
 
 func (m *Manager) process(parentCtx context.Context, id string) {
+	ctx, cancel := context.WithTimeout(parentCtx, m.cfg.WorkerTimeout)
+	defer cancel()
+
 	m.mu.Lock()
 	rec, ok := m.jobs[id]
 	if !ok {
@@ -235,11 +238,10 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 		m.mu.Unlock()
 		return
 	}
-	if err := rec.Transition(job.StateRunning, time.Now(), "build started"); err != nil {
+	if err := m.startJobLocked(rec, time.Now(), cancel); err != nil {
 		m.mu.Unlock()
 		return
 	}
-	rec.CurrentStep = "launch"
 	startTop := rec.Manifest.Top
 	startPart := rec.Manifest.Part
 	project := rec.Manifest.Project
@@ -247,13 +249,6 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 	m.emitEventLocked(rec, "running")
 	m.mu.Unlock()
 	log.Printf("%s started top=%q part=%q", jobLogPrefix(id, project), startTop, startPart)
-
-	ctx, cancel := context.WithTimeout(parentCtx, m.cfg.WorkerTimeout)
-	defer cancel()
-
-	m.mu.Lock()
-	m.cancels[id] = cancel
-	m.mu.Unlock()
 
 	result, buildErr := m.builder.Build(ctx, builder.BuildJob{
 		ID:           rec.ID,
@@ -386,6 +381,15 @@ func (m *Manager) progressUpdater(jobID string) builder.ProgressFunc {
 			log.Printf("%s step=%s", jobLogPrefix(jobID, project), logStep)
 		}
 	}
+}
+
+func (m *Manager) startJobLocked(rec *job.Record, now time.Time, cancel context.CancelFunc) error {
+	if err := rec.Transition(job.StateRunning, now, "build started"); err != nil {
+		return err
+	}
+	rec.CurrentStep = "launch"
+	m.cancels[rec.ID] = cancel
+	return nil
 }
 
 func (m *Manager) SubscribeEvents(jobID string, since int64) ([]job.Event, <-chan job.Event, func(), bool) {
