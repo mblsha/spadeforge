@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,6 +129,19 @@ func TestWorker_UpdatesStatesCorrectly_OnSuccess(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(st.ArtifactsJobDir(rec.ID), "artifact_manifest.json")); err != nil {
 		t.Fatalf("expected artifact_manifest.json: %v", err)
+	}
+	rawMeta, err := os.ReadFile(filepath.Join(st.ArtifactsJobDir(rec.ID), "artifact_manifest.json"))
+	if err != nil {
+		t.Fatalf("read artifact_manifest.json: %v", err)
+	}
+	var meta struct {
+		Project string `json:"project"`
+	}
+	if err := json.Unmarshal(rawMeta, &meta); err != nil {
+		t.Fatalf("decode artifact_manifest.json: %v", err)
+	}
+	if meta.Project != "ok" {
+		t.Fatalf("expected project %q in artifact manifest, got %q", "ok", meta.Project)
 	}
 }
 
@@ -249,6 +264,39 @@ func TestWorker_ProgressStepAndHeartbeat(t *testing.T) {
 	}
 }
 
+func TestWorker_LogsProjectName(t *testing.T) {
+	cfg := testConfig(t)
+	st := store.New(cfg)
+	mgr := New(cfg, st, &builder.FakeBuilder{})
+
+	var buf bytes.Buffer
+	origWriter := log.Writer()
+	origFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(origWriter)
+		log.SetFlags(origFlags)
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, err := mgr.Submit(context.Background(), bytes.NewReader(validBundleBytes(t, "demo")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForTerminalState(t, mgr, rec.ID)
+
+	output := buf.String()
+	if !strings.Contains(output, `project="demo"`) {
+		t.Fatalf("expected project name in logs, got %q", output)
+	}
+}
+
 func TestWorker_PreserveWorkDirOption(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.PreserveWorkDir = true
@@ -301,6 +349,9 @@ func TestEvents_SubscribeProvidesBacklog(t *testing.T) {
 	}
 	if events[0].Type != "queued" {
 		t.Fatalf("expected first event queued, got %q", events[0].Type)
+	}
+	if events[0].Project != "ok" {
+		t.Fatalf("expected project on queued event, got %+v", events[0])
 	}
 	if !events[len(events)-1].Terminal() {
 		t.Fatalf("expected last event terminal, got %+v", events[len(events)-1])

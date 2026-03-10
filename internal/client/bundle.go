@@ -23,6 +23,10 @@ type BundleSpec struct {
 }
 
 func BuildBundle(spec BundleSpec) ([]byte, error) {
+	project := strings.TrimSpace(spec.Project)
+	if project == "" {
+		return nil, fmt.Errorf("project is required")
+	}
 	if strings.TrimSpace(spec.Top) == "" {
 		return nil, fmt.Errorf("top is required")
 	}
@@ -71,7 +75,7 @@ func BuildBundle(spec BundleSpec) ([]byte, error) {
 
 	mf := manifest.Manifest{
 		Schema:      1,
-		Project:     spec.Project,
+		Project:     project,
 		Top:         spec.Top,
 		Part:        spec.Part,
 		Sources:     manifestSources,

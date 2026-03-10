@@ -118,6 +118,35 @@ func TestSubmitJob_RejectsMissingToken(t *testing.T) {
 	}
 }
 
+func TestSubmitJob_RejectsMissingProject(t *testing.T) {
+	ts, cfg, _, cancel := newTestServer(t, &builder.FakeBuilder{})
+	defer cancel()
+
+	body, contentType := multipartBody(t, validBundleBytes(t, ""))
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/jobs", &body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set(cfg.AuthHeader, cfg.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 400, got %d body=%s", resp.StatusCode, string(raw))
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "project is required") {
+		t.Fatalf("expected missing project error, got %q", string(raw))
+	}
+}
+
 func TestJobStatus_ExposesStepAndHeartbeat(t *testing.T) {
 	block := make(chan struct{})
 	fb := &builder.FakeBuilder{
@@ -257,6 +286,9 @@ func TestEventsEndpoint_StreamsBacklog(t *testing.T) {
 	}
 	if !strings.Contains(payload, "event: succeeded") {
 		t.Fatalf("expected succeeded event, got %q", payload)
+	}
+	if !strings.Contains(payload, `"project":"ok"`) {
+		t.Fatalf("expected project in event payload, got %q", payload)
 	}
 }
 

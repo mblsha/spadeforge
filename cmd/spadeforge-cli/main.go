@@ -115,7 +115,7 @@ func runSubmit(args []string) error {
 	discoverDomain := fs.String("discover-domain", discovery.DefaultDomain, "mDNS discovery domain")
 	token := fs.String("token", strings.TrimSpace(os.Getenv("SPADEFORGE_TOKEN")), "auth token")
 	authHeader := fs.String("auth-header", defaultString(os.Getenv("SPADEFORGE_AUTH_HEADER"), "X-Build-Token"), "auth header")
-	project := fs.String("project", "spade", "project name")
+	project := fs.String("project", "", "project name (required)")
 	top := fs.String("top", "", "top module name")
 	part := fs.String("part", "", "target FPGA part")
 	outputDir := fs.String("output-dir", "output", "directory where artifacts are extracted (under <output-dir>/<job_id>/)")
@@ -148,6 +148,9 @@ func runSubmit(args []string) error {
 		}
 	}
 
+	if strings.TrimSpace(*project) == "" {
+		return fmt.Errorf("--project is required")
+	}
 	if *top == "" || *part == "" {
 		return fmt.Errorf("both --top and --part are required")
 	}
@@ -364,8 +367,8 @@ func (s *stringListFlag) Set(v string) error {
 
 func usage() {
 	_, _ = os.Stderr.WriteString("spadeforge-cli usage:\n")
-	_, _ = os.Stderr.WriteString("  spadeforge-cli --top <top> --part <part> --source build/spade.sv [--xdc top.xdc] [--output-dir output] [--server http://host:8080]\n")
-	_, _ = os.Stderr.WriteString("  spadeforge-cli submit --top <top> --part <part> --source build/spade.sv [--xdc top.xdc] [--output-dir output] [--server http://host:8080]\n")
+	_, _ = os.Stderr.WriteString("  spadeforge-cli --project <name> --top <top> --part <part> --source build/spade.sv [--xdc top.xdc] [--output-dir output] [--server http://host:8080]\n")
+	_, _ = os.Stderr.WriteString("  spadeforge-cli submit --project <name> --top <top> --part <part> --source build/spade.sv [--xdc top.xdc] [--output-dir output] [--server http://host:8080]\n")
 }
 
 func defaultString(v, fallback string) string {

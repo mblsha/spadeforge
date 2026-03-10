@@ -5,9 +5,10 @@ import "time"
 type Event struct {
 	Seq int64 `json:"seq"`
 
-	JobID string `json:"job_id"`
-	Type  string `json:"type"`
-	State State  `json:"state"`
+	JobID   string `json:"job_id"`
+	Project string `json:"project,omitempty"`
+	Type    string `json:"type"`
+	State   State  `json:"state"`
 
 	Step    string `json:"step,omitempty"`
 	Message string `json:"message,omitempty"`

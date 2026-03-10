@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -124,6 +125,7 @@ func (m *Manager) Submit(ctx context.Context, bundle io.Reader) (*job.Record, er
 	m.jobs[id] = rec
 	m.emitEventLocked(rec, "queued")
 	m.mu.Unlock()
+	log.Printf("%s queued top=%q part=%q", jobLogPrefix(rec.ID, rec.Manifest.Project), rec.Manifest.Top, rec.Manifest.Part)
 
 	m.enqueue(id)
 	return rec, nil
@@ -154,6 +156,7 @@ func (m *Manager) KillJob(jobID string) error {
 	if !ok {
 		return fmt.Errorf("job %s is queued but not yet running", jobID)
 	}
+	log.Printf("%s kill requested", jobLogPrefix(rec.ID, rec.Manifest.Project))
 	cancel()
 	return nil
 }
@@ -239,10 +242,11 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 	rec.CurrentStep = "launch"
 	startTop := rec.Manifest.Top
 	startPart := rec.Manifest.Part
+	project := rec.Manifest.Project
 	_ = m.store.Save(rec)
 	m.emitEventLocked(rec, "running")
 	m.mu.Unlock()
-	log.Printf("[job %s] started top=%q part=%q", id, startTop, startPart)
+	log.Printf("%s started top=%q part=%q", jobLogPrefix(id, project), startTop, startPart)
 
 	ctx, cancel := context.WithTimeout(parentCtx, m.cfg.WorkerTimeout)
 	defer cancel()
@@ -295,18 +299,18 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 		rec.FailureSummary = failureSummary
 		rec.CurrentStep = "failed"
 		if errors.Is(buildErr, context.Canceled) {
-			terminalLog = fmt.Sprintf("[job %s] killed (context canceled)", id)
+			terminalLog = fmt.Sprintf("%s killed (context canceled)", jobLogPrefix(id, rec.Manifest.Project))
 		} else if failureKind != "" {
 			terminalLog = fmt.Sprintf(
-				"[job %s] failed kind=%s summary=%q message=%q error=%v",
-				id,
+				"%s failed kind=%s summary=%q message=%q error=%v",
+				jobLogPrefix(id, rec.Manifest.Project),
 				failureKind,
 				failureSummary,
 				result.Message,
 				buildErr,
 			)
 		} else {
-			terminalLog = fmt.Sprintf("[job %s] failed message=%q error=%v", id, result.Message, buildErr)
+			terminalLog = fmt.Sprintf("%s failed message=%q error=%v", jobLogPrefix(id, rec.Manifest.Project), result.Message, buildErr)
 		}
 		m.emitEventLocked(rec, "failed")
 	} else {
@@ -321,7 +325,7 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 		rec.FailureKind = ""
 		rec.FailureSummary = ""
 		rec.CurrentStep = "done"
-		terminalLog = fmt.Sprintf("[job %s] succeeded exit_code=%d message=%q", id, result.ExitCode, result.Message)
+		terminalLog = fmt.Sprintf("%s succeeded exit_code=%d message=%q", jobLogPrefix(id, rec.Manifest.Project), result.ExitCode, result.Message)
 		m.emitEventLocked(rec, "succeeded")
 	}
 	_ = m.store.Save(rec)
@@ -374,11 +378,12 @@ func (m *Manager) progressUpdater(jobID string) builder.ProgressFunc {
 		if update.Message != "" {
 			rec.Message = update.Message
 		}
+		project := rec.Manifest.Project
 		_ = m.store.Save(rec)
 		m.emitEventLocked(rec, "progress")
 		m.mu.Unlock()
 		if logStep != "" {
-			log.Printf("[job %s] step=%s", jobID, logStep)
+			log.Printf("%s step=%s", jobLogPrefix(jobID, project), logStep)
 		}
 	}
 }
@@ -457,6 +462,7 @@ func (m *Manager) emitEventLocked(rec *job.Record, eventType string) {
 	ev := job.Event{
 		Seq:            seq,
 		JobID:          rec.ID,
+		Project:        rec.Manifest.Project,
 		Type:           eventType,
 		State:          rec.State,
 		Step:           rec.CurrentStep,
@@ -477,6 +483,21 @@ func (m *Manager) emitEventLocked(rec *job.Record, eventType string) {
 	for ch := range m.subscribers[rec.ID] {
 		publishEvent(ch, ev)
 	}
+}
+
+func jobLogPrefix(jobID, project string) string {
+	project = strings.TrimSpace(project)
+	if project == "" {
+		return fmt.Sprintf("[job %s]", jobID)
+	}
+	return fmt.Sprintf("[job %s project=%q]", jobID, project)
+}
+
+func projectName(rec *job.Record) string {
+	if rec == nil {
+		return ""
+	}
+	return strings.TrimSpace(rec.Manifest.Project)
 }
 
 func publishEvent(ch chan job.Event, ev job.Event) {
