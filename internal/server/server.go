@@ -25,6 +25,8 @@ type API struct {
 	mux     *http.ServeMux
 }
 
+var execCommand = exec.Command
+
 func New(cfg config.Config, manager *queue.Manager) *API {
 	a := &API{cfg: cfg, manager: manager, mux: http.NewServeMux()}
 	a.routes()
@@ -209,20 +211,46 @@ func (a *API) handleGetDiagnostics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleKillAllVivado(w http.ResponseWriter, _ *http.Request) {
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("taskkill", "/F", "/IM", "vivado.exe", "/T")
-	} else {
-		cmd = exec.Command("pkill", "-9", "vivado")
-	}
+	cmd := killAllVivadoCommand(runtime.GOOS)
 	out, err := cmd.CombinedOutput()
 	msg := strings.TrimSpace(string(out))
 	if err != nil {
-		// taskkill/pkill exit non-zero when no matching process is found; treat that as "none running".
-		writeJSON(w, http.StatusOK, map[string]string{"status": "no vivado processes found", "detail": msg})
+		if isNoVivadoProcessesError(runtime.GOOS, err, msg) {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "no vivado processes found", "detail": msg})
+			return
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "failed", "detail": msg})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "killed", "detail": msg})
+}
+
+func killAllVivadoCommand(goos string) *exec.Cmd {
+	if goos == "windows" {
+		return execCommand("taskkill", "/F", "/IM", "vivado.exe", "/T")
+	}
+	return execCommand("pkill", "-9", "vivado")
+}
+
+func isNoVivadoProcessesError(goos string, err error, msg string) bool {
+	if err == nil {
+		return false
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	if goos != "windows" {
+		return exitErr.ExitCode() == 1
+	}
+
+	lowered := strings.ToLower(strings.TrimSpace(msg))
+	return strings.Contains(lowered, "not found") ||
+		strings.Contains(lowered, "no running instance") ||
+		strings.Contains(lowered, "no tasks are running")
 }
 
 func (a *API) handleKillJob(w http.ResponseWriter, r *http.Request) {

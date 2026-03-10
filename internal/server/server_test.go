@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -289,6 +290,44 @@ func TestEventsEndpoint_StreamsBacklog(t *testing.T) {
 	}
 	if !strings.Contains(payload, `"project":"ok"`) {
 		t.Fatalf("expected project in event payload, got %q", payload)
+	}
+}
+
+func TestKillAllVivado_ExecFailureReturnsServerError(t *testing.T) {
+	origExecCommand := execCommand
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("/definitely/missing/kill-command")
+	}
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+	})
+
+	ts, cfg, _, cancel := newTestServer(t, &builder.FakeBuilder{})
+	defer cancel()
+
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/kill-all-vivado", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(cfg.AuthHeader, cfg.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 500, got %d body=%s", resp.StatusCode, string(raw))
+	}
+	var payload struct {
+		Status string `json:"status"`
+		Detail string `json:"detail"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Status != "failed" || payload.Detail == "" {
+		t.Fatalf("unexpected payload: %+v", payload)
 	}
 }
 
