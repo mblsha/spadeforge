@@ -20,20 +20,25 @@ func TestManifestValidate_MissingFields(t *testing.T) {
 		t.Fatalf("expected error for missing top")
 	}
 
-	m = Manifest{Top: "top", Sources: []string{"hdl/spade.sv"}}
+	m = Manifest{Project: "demo", Top: "top", Sources: []string{"hdl/spade.sv"}}
 	if err := m.Validate(root); err == nil {
 		t.Fatalf("expected error for missing part")
 	}
 
-	m = Manifest{Top: "top", Part: "xc7"}
+	m = Manifest{Project: "demo", Top: "top", Part: "xc7"}
 	if err := m.Validate(root); err == nil {
 		t.Fatalf("expected error for missing sources")
+	}
+
+	m = Manifest{Top: "top", Part: "xc7", Sources: []string{"hdl/spade.sv"}}
+	if err := m.Validate(root); err == nil {
+		t.Fatalf("expected error for missing project")
 	}
 }
 
 func TestManifestValidate_RejectsPathTraversal(t *testing.T) {
 	root := t.TempDir()
-	m := Manifest{Top: "top", Part: "xc7", Sources: []string{"../spade.sv"}}
+	m := Manifest{Project: "demo", Top: "top", Part: "xc7", Sources: []string{"../spade.sv"}}
 	if err := m.Validate(root); err == nil {
 		t.Fatalf("expected path traversal rejection")
 	}
@@ -41,7 +46,7 @@ func TestManifestValidate_RejectsPathTraversal(t *testing.T) {
 
 func TestManifestValidate_ReferencedFilesMustExist(t *testing.T) {
 	root := t.TempDir()
-	m := Manifest{Top: "top", Part: "xc7", Sources: []string{"hdl/spade.sv"}}
+	m := Manifest{Project: "demo", Top: "top", Part: "xc7", Sources: []string{"hdl/spade.sv"}}
 	if err := m.Validate(root); err == nil {
 		t.Fatalf("expected missing file rejection")
 	}
@@ -63,6 +68,7 @@ func TestManifestValidate_Success(t *testing.T) {
 	}
 
 	m := Manifest{
+		Project:     "demo",
 		Top:         "top",
 		Part:        "xc7a35tcsg324-1",
 		Sources:     []string{"hdl/spade.sv"},

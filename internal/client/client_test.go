@@ -50,6 +50,23 @@ func TestBundleBuilder_IncludesSpadeSVAndXDCAndManifest(t *testing.T) {
 	}
 }
 
+func TestBundleBuilder_RequiresProject(t *testing.T) {
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "spade.sv")
+	if err := os.WriteFile(src, []byte("module top;endmodule\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := BuildBundle(BundleSpec{
+		Top:     "top",
+		Part:    "xc7a35tcsg324-1",
+		Sources: []string{src},
+	})
+	if err == nil || !strings.Contains(err.Error(), "project is required") {
+		t.Fatalf("expected missing project error, got %v", err)
+	}
+}
+
 func TestClient_HandlesServerErrors(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/v1/jobs" {

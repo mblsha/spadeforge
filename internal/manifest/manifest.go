@@ -37,6 +37,10 @@ func Parse(raw []byte) (Manifest, error) {
 }
 
 func (m *Manifest) Validate(root string) error {
+	m.Project = strings.TrimSpace(m.Project)
+	if m.Project == "" {
+		return errors.New("project is required")
+	}
 	if strings.TrimSpace(m.Top) == "" {
 		return errors.New("top is required")
 	}

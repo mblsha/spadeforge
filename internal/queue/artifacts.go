@@ -72,6 +72,7 @@ type artifactManifest struct {
 	Schema int `json:"schema"`
 
 	JobID       string    `json:"job_id"`
+	Project     string    `json:"project"`
 	GeneratedAt time.Time `json:"generated_at"`
 	State       job.State `json:"state"`
 
@@ -117,10 +118,12 @@ func (m *Manager) writeArtifactManifest(
 	}
 	reqHash, _ := sha256File(m.store.RequestZipPath(jobID))
 	builderName, builderVersion, builderBinary := m.builderInfo(filepath.Join(artDir, "vivado.log"))
+	rec, _ := m.Get(jobID)
 
 	meta := artifactManifest{
 		Schema:              1,
 		JobID:               jobID,
+		Project:             projectName(rec),
 		GeneratedAt:         time.Now().UTC(),
 		State:               finalState,
 		FailureKind:         failureKind,

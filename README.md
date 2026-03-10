@@ -27,8 +27,23 @@ Minimal remote Vivado build service for Spade bundles.
 - `GET /v1/jobs/{id}`
 - `GET /v1/jobs/{id}/artifacts`
 - `GET /v1/jobs/{id}/log`
+- `GET /v1/jobs/{id}/tail?lines=<n>`
+- `GET /v1/jobs/{id}/diagnostics`
+- `GET /v1/jobs/{id}/events?since=<seq>`
+- `POST /v1/jobs/{id}/kill`
+- `POST /v1/kill-all-vivado`
 
-`GET /v1/jobs/{id}` includes `current_step` and `heartbeat_at` while running.
+When `SPADEFORGE_TOKEN` is set, authenticated requests must send it in `X-Build-Token` or the header named by `SPADEFORGE_AUTH_HEADER`.
+
+Job submission uploads a zip bundle with a required `manifest.json`. The manifest must include:
+
+- `schema`
+- `project`
+- `top`
+- `part`
+- `sources`
+
+`GET /v1/jobs/{id}` includes the submitted manifest, including `manifest.project`, and also includes `current_step` and `heartbeat_at` while running.
 
 ## Server config (env)
 
@@ -63,6 +78,7 @@ Submit from Linux side:
 
 ```bash
 spadeforge-cli \
+  --project demo \
   --top top \
   --part xc7a35tcsg324-1 \
   --source build/spade.sv \

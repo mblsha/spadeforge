@@ -112,8 +112,9 @@ func (a *API) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusAccepted, map[string]string{
-		"job_id": rec.ID,
-		"state":  string(rec.State),
+		"job_id":  rec.ID,
+		"project": rec.Manifest.Project,
+		"state":   string(rec.State),
 	})
 }
 
