@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestParseMode(t *testing.T) {
 	t.Parallel()
@@ -165,4 +171,125 @@ func TestResolveOpenFPGALoaderBin(t *testing.T) {
 	if _, err := resolveOpenFPGALoaderBin("definitely-not-a-real-binary-xyz"); err == nil {
 		t.Fatalf("expected error for missing binary")
 	}
+}
+
+func TestWaitForServerHealthy(t *testing.T) {
+	t.Parallel()
+
+	t.Run("succeeds after retries", func(t *testing.T) {
+		t.Parallel()
+
+		attempts := 0
+		probe := func(_ context.Context, _ string) error {
+			attempts++
+			if attempts < 3 {
+				return errors.New("connection refused")
+			}
+			return nil
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		if err := waitForServerHealthy(ctx, "http://127.0.0.1:8080", make(chan error), probe, time.Millisecond); err != nil {
+			t.Fatalf("waitForServerHealthy() error: %v", err)
+		}
+		if attempts != 3 {
+			t.Fatalf("attempts = %d, want 3", attempts)
+		}
+	})
+
+	t.Run("returns embedded server error", func(t *testing.T) {
+		t.Parallel()
+
+		serverErrCh := make(chan error, 1)
+		serverErrCh <- errors.New("listen tcp :8080: bind: address already in use")
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		err := waitForServerHealthy(
+			ctx,
+			"http://127.0.0.1:8080",
+			serverErrCh,
+			func(_ context.Context, _ string) error { return errors.New("connection refused") },
+			time.Millisecond,
+		)
+		if err == nil {
+			t.Fatalf("expected error")
+		}
+		if !strings.Contains(err.Error(), "failed before becoming healthy") {
+			t.Fatalf("error = %q, want startup failure context", err)
+		}
+		if !strings.Contains(err.Error(), "address already in use") {
+			t.Fatalf("error = %q, want listen failure detail", err)
+		}
+	})
+}
+
+func TestMonitorServerHealth(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fails after consecutive probe errors", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		ch := monitorServerHealth(
+			ctx,
+			"http://127.0.0.1:8080",
+			func(_ context.Context, _ string) error { return errors.New("connection refused") },
+			time.Millisecond,
+			2,
+		)
+
+		select {
+		case err := <-ch:
+			if err == nil {
+				t.Fatalf("expected error")
+			}
+			if !strings.Contains(err.Error(), "became unreachable") {
+				t.Fatalf("error = %q, want unreachable context", err)
+			}
+		case <-time.After(250 * time.Millisecond):
+			t.Fatalf("timed out waiting for health monitor failure")
+		}
+	})
+
+	t.Run("resets after transient failure", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		attempts := 0
+		ch := monitorServerHealth(
+			ctx,
+			"http://127.0.0.1:8080",
+			func(_ context.Context, _ string) error {
+				attempts++
+				switch attempts {
+				case 1:
+					return errors.New("connection refused")
+				case 2:
+					return nil
+				default:
+					cancel()
+					return nil
+				}
+			},
+			time.Millisecond,
+			2,
+		)
+
+		select {
+		case err := <-ch:
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		case <-time.After(250 * time.Millisecond):
+			t.Fatalf("timed out waiting for monitor shutdown")
+		}
+	})
 }
