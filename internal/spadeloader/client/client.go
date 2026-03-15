@@ -21,8 +21,6 @@ import (
 	"github.com/mblsha/spadeforge/internal/spadeloader/job"
 )
 
-const defaultAuthHeader = "X-Build-Token"
-
 type SubmitRequest struct {
 	Board         string
 	DesignName    string
@@ -30,10 +28,8 @@ type SubmitRequest struct {
 }
 
 type HTTPClient struct {
-	BaseURL    string
-	Token      string
-	AuthHeader string
-	Client     *http.Client
+	BaseURL string
+	Client  *http.Client
 }
 
 func (c *HTTPClient) SubmitFlash(ctx context.Context, req SubmitRequest) (string, error) {
@@ -68,7 +64,6 @@ func (c *HTTPClient) SubmitFlash(ctx context.Context, req SubmitRequest) (string
 		return "", err
 	}
 	httpReq.Header.Set("Content-Type", mw.FormDataContentType())
-	c.setAuth(httpReq)
 
 	resp, err := c.httpClient().Do(httpReq)
 	if err != nil {
@@ -97,7 +92,6 @@ func (c *HTTPClient) GetJob(ctx context.Context, jobID string) (*job.Record, err
 	if err != nil {
 		return nil, err
 	}
-	c.setAuth(httpReq)
 
 	resp, err := c.httpClient().Do(httpReq)
 	if err != nil {
@@ -133,7 +127,6 @@ func (c *HTTPClient) ListJobs(ctx context.Context, limit int) ([]job.Record, err
 	if err != nil {
 		return nil, err
 	}
-	c.setAuth(httpReq)
 
 	resp, err := c.httpClient().Do(httpReq)
 	if err != nil {
@@ -160,7 +153,6 @@ func (c *HTTPClient) ReflashJob(ctx context.Context, sourceJobID string) (string
 	if err != nil {
 		return "", err
 	}
-	c.setAuth(httpReq)
 
 	resp, err := c.httpClient().Do(httpReq)
 	if err != nil {
@@ -221,7 +213,6 @@ func (c *HTTPClient) GetLog(ctx context.Context, jobID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	c.setAuth(httpReq)
 
 	resp, err := c.httpClient().Do(httpReq)
 	if err != nil {
@@ -256,7 +247,6 @@ func (c *HTTPClient) GetLogTail(ctx context.Context, jobID string, lines int) (s
 	if err != nil {
 		return "", err
 	}
-	c.setAuth(httpReq)
 
 	resp, err := c.httpClient().Do(httpReq)
 	if err != nil {
@@ -289,7 +279,6 @@ func (c *HTTPClient) StreamEvents(ctx context.Context, jobID string, since int64
 	if err != nil {
 		return err
 	}
-	c.setAuth(httpReq)
 
 	resp, err := c.httpClient().Do(httpReq)
 	if err != nil {
@@ -358,7 +347,6 @@ func (c *HTTPClient) GetRecentDesigns(ctx context.Context, limit int) ([]history
 	if err != nil {
 		return nil, err
 	}
-	c.setAuth(httpReq)
 
 	resp, err := c.httpClient().Do(httpReq)
 	if err != nil {
@@ -397,14 +385,4 @@ func (c *HTTPClient) httpClient() *http.Client {
 		return c.Client
 	}
 	return http.DefaultClient
-}
-
-func (c *HTTPClient) setAuth(req *http.Request) {
-	header := c.AuthHeader
-	if strings.TrimSpace(header) == "" {
-		header = defaultAuthHeader
-	}
-	if strings.TrimSpace(c.Token) != "" {
-		req.Header.Set(header, c.Token)
-	}
 }

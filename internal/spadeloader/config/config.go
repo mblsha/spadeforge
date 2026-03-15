@@ -15,7 +15,6 @@ import (
 
 const (
 	defaultListenAddr        = ":8080"
-	defaultAuthHeader        = "X-Build-Token"
 	defaultMaxUploadBytes    = int64(64 << 20) // 64 MiB
 	defaultWorkerTimeout     = 10 * time.Minute
 	defaultOpenFPGALoaderBin = "openFPGALoader"
@@ -35,8 +34,6 @@ type Config struct {
 	ListenAddr string
 	BaseDir    string
 
-	Token         string
-	AuthHeader    string
 	Allowlist     []string
 	AllowedBoards []string
 
@@ -58,7 +55,6 @@ type Config struct {
 func Default() Config {
 	return Config{
 		ListenAddr:        defaultListenAddr,
-		AuthHeader:        defaultAuthHeader,
 		OpenFPGALoaderBin: defaultOpenFPGALoaderBin,
 		MaxUploadBytes:    defaultMaxUploadBytes,
 		WorkerTimeout:     defaultWorkerTimeout,
@@ -83,8 +79,6 @@ func FromEnv() (Config, error) {
 		}
 		cfg.BaseDir = baseDir
 	}
-	cfg.Token = strings.TrimSpace(os.Getenv("SPADELOADER_TOKEN"))
-	cfg.AuthHeader = getEnv("SPADELOADER_AUTH_HEADER", cfg.AuthHeader)
 	cfg.Allowlist = parseCSV(os.Getenv("SPADELOADER_ALLOWLIST"))
 	cfg.AllowedBoards = parseCSV(os.Getenv("SPADELOADER_ALLOWED_BOARDS"))
 	cfg.OpenFPGALoaderBin = getEnv("SPADELOADER_OPENFPGALOADER_BIN", cfg.OpenFPGALoaderBin)
@@ -126,9 +120,6 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.ListenAddr) == "" {
 		return errors.New("listen addr is required")
-	}
-	if strings.TrimSpace(c.AuthHeader) == "" {
-		return errors.New("auth header is required")
 	}
 	if c.MaxUploadBytes <= 0 {
 		return errors.New("max upload bytes must be > 0")

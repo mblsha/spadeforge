@@ -33,8 +33,6 @@ Minimal remote Vivado build service for Spade bundles.
 - `POST /v1/jobs/{id}/kill`
 - `POST /v1/kill-all-vivado`
 
-When `SPADEFORGE_TOKEN` is set, authenticated requests must send it in `X-Build-Token` or the header named by `SPADEFORGE_AUTH_HEADER`.
-
 Job submission uploads a zip bundle with a required `manifest.json`. The manifest must include:
 
 - `schema`
@@ -49,8 +47,6 @@ Job submission uploads a zip bundle with a required `manifest.json`. The manifes
 
 - `SPADEFORGE_BASE_DIR` (required)
 - `SPADEFORGE_LISTEN_ADDR` (default `:8080`)
-- `SPADEFORGE_TOKEN` (optional)
-- `SPADEFORGE_AUTH_HEADER` (default `X-Build-Token`)
 - `SPADEFORGE_ALLOWLIST` (optional CSV of IP/CIDR)
 - `SPADEFORGE_VIVADO_BIN` (default `vivado`)
 - `SPADEFORGE_MAX_UPLOAD_BYTES`
