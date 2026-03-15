@@ -346,7 +346,6 @@ func monitorServerHealth(ctx context.Context, serverURL string, probe healthProb
 			cancel()
 			if err == nil {
 				failures = 0
-				lastErr = nil
 				continue
 			}
 
