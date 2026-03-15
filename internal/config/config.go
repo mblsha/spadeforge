@@ -13,7 +13,6 @@ import (
 
 const (
 	defaultListenAddr              = ":8080"
-	defaultAuthHeader              = "X-Build-Token"
 	defaultMaxUploadBytes    int64 = 256 << 20
 	defaultMaxFiles                = 4096
 	defaultMaxExtractedTotal int64 = 1024 << 20
@@ -32,9 +31,7 @@ type Config struct {
 	ListenAddr string
 	BaseDir    string
 
-	Token      string
-	AuthHeader string
-	Allowlist  []string
+	Allowlist []string
 
 	MaxUploadBytes         int64
 	MaxExtractedFiles      int
@@ -56,7 +53,6 @@ type Config struct {
 func Default() Config {
 	return Config{
 		ListenAddr:             defaultListenAddr,
-		AuthHeader:             defaultAuthHeader,
 		MaxUploadBytes:         defaultMaxUploadBytes,
 		MaxExtractedFiles:      defaultMaxFiles,
 		MaxExtractedTotalBytes: defaultMaxExtractedTotal,
@@ -75,8 +71,6 @@ func FromEnv() (Config, error) {
 	cfg := Default()
 	cfg.ListenAddr = getEnv("SPADEFORGE_LISTEN_ADDR", cfg.ListenAddr)
 	cfg.BaseDir = strings.TrimSpace(os.Getenv("SPADEFORGE_BASE_DIR"))
-	cfg.Token = strings.TrimSpace(os.Getenv("SPADEFORGE_TOKEN"))
-	cfg.AuthHeader = getEnv("SPADEFORGE_AUTH_HEADER", cfg.AuthHeader)
 	cfg.Allowlist = parseCSV(os.Getenv("SPADEFORGE_ALLOWLIST"))
 	cfg.VivadoBin = getEnv("SPADEFORGE_VIVADO_BIN", cfg.VivadoBin)
 	cfg.PreserveWorkDir = parseBoolEnv(os.Getenv("SPADEFORGE_PRESERVE_WORK_DIR"))
@@ -137,9 +131,6 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.ListenAddr) == "" {
 		return errors.New("listen addr is required")
-	}
-	if strings.TrimSpace(c.AuthHeader) == "" {
-		return errors.New("auth header is required")
 	}
 	if c.MaxUploadBytes <= 0 {
 		return errors.New("max upload bytes must be > 0")

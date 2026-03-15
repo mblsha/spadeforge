@@ -49,8 +49,6 @@ func runKillAllVivado(args []string) error {
 	discoverTimeout := fs.Duration("discover-timeout", 2*time.Second, "mDNS auto-discovery timeout")
 	discoverService := fs.String("discover-service", discovery.DefaultServiceName, "mDNS service name used for discovery")
 	discoverDomain := fs.String("discover-domain", discovery.DefaultDomain, "mDNS discovery domain")
-	token := fs.String("token", strings.TrimSpace(os.Getenv("SPADEFORGE_TOKEN")), "auth token")
-	authHeader := fs.String("auth-header", defaultString(os.Getenv("SPADEFORGE_AUTH_HEADER"), "X-Build-Token"), "auth header")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -61,7 +59,7 @@ func runKillAllVivado(args []string) error {
 		return err
 	}
 
-	c := &client.HTTPClient{BaseURL: resolvedServerURL, Token: *token, AuthHeader: *authHeader}
+	c := &client.HTTPClient{BaseURL: resolvedServerURL}
 	result, err := c.KillAllVivado(context.Background())
 	if err != nil {
 		return err
@@ -77,8 +75,6 @@ func runKill(args []string) error {
 	discoverTimeout := fs.Duration("discover-timeout", 2*time.Second, "mDNS auto-discovery timeout")
 	discoverService := fs.String("discover-service", discovery.DefaultServiceName, "mDNS service name used for discovery")
 	discoverDomain := fs.String("discover-domain", discovery.DefaultDomain, "mDNS discovery domain")
-	token := fs.String("token", strings.TrimSpace(os.Getenv("SPADEFORGE_TOKEN")), "auth token")
-	authHeader := fs.String("auth-header", defaultString(os.Getenv("SPADEFORGE_AUTH_HEADER"), "X-Build-Token"), "auth header")
 	jobID := fs.String("job-id", "", "job ID to kill (required)")
 
 	if err := fs.Parse(args); err != nil {
@@ -93,7 +89,7 @@ func runKill(args []string) error {
 		return err
 	}
 
-	c := &client.HTTPClient{BaseURL: resolvedServerURL, Token: *token, AuthHeader: *authHeader}
+	c := &client.HTTPClient{BaseURL: resolvedServerURL}
 	if err := c.KillJob(context.Background(), *jobID); err != nil {
 		return err
 	}
@@ -113,8 +109,6 @@ func runSubmit(args []string) error {
 	discoverTimeout := fs.Duration("discover-timeout", 2*time.Second, "mDNS auto-discovery timeout")
 	discoverService := fs.String("discover-service", discovery.DefaultServiceName, "mDNS service name used for discovery")
 	discoverDomain := fs.String("discover-domain", discovery.DefaultDomain, "mDNS discovery domain")
-	token := fs.String("token", strings.TrimSpace(os.Getenv("SPADEFORGE_TOKEN")), "auth token")
-	authHeader := fs.String("auth-header", defaultString(os.Getenv("SPADEFORGE_AUTH_HEADER"), "X-Build-Token"), "auth header")
 	project := fs.String("project", "", "project name (required)")
 	top := fs.String("top", "", "top module name")
 	part := fs.String("part", "", "target FPGA part")
@@ -174,7 +168,7 @@ func runSubmit(args []string) error {
 		return err
 	}
 
-	c := &client.HTTPClient{BaseURL: resolvedServerURL, Token: *token, AuthHeader: *authHeader}
+	c := &client.HTTPClient{BaseURL: resolvedServerURL}
 	ctx := context.Background()
 	jobID, err := c.SubmitBundle(ctx, bundle)
 	if err != nil {

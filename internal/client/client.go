@@ -18,13 +18,9 @@ import (
 	"github.com/mblsha/spadeforge/internal/job"
 )
 
-const defaultAuthHeader = "X-Build-Token"
-
 type HTTPClient struct {
-	BaseURL    string
-	Token      string
-	AuthHeader string
-	Client     *http.Client
+	BaseURL string
+	Client  *http.Client
 }
 
 func (c *HTTPClient) SubmitBundle(ctx context.Context, bundle []byte) (string, error) {
@@ -46,7 +42,6 @@ func (c *HTTPClient) SubmitBundle(ctx context.Context, bundle []byte) (string, e
 		return "", err
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
-	c.setAuth(req)
 
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
@@ -75,7 +70,6 @@ func (c *HTTPClient) GetJob(ctx context.Context, jobID string) (*job.Record, err
 	if err != nil {
 		return nil, err
 	}
-	c.setAuth(req)
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return nil, err
@@ -131,7 +125,6 @@ func (c *HTTPClient) DownloadArtifacts(ctx context.Context, jobID string, out io
 	if err != nil {
 		return err
 	}
-	c.setAuth(req)
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return err
@@ -150,7 +143,6 @@ func (c *HTTPClient) KillJob(ctx context.Context, jobID string) error {
 	if err != nil {
 		return err
 	}
-	c.setAuth(req)
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return err
@@ -168,7 +160,6 @@ func (c *HTTPClient) KillAllVivado(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	c.setAuth(req)
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return "", err
@@ -192,7 +183,6 @@ func (c *HTTPClient) GetDiagnostics(ctx context.Context, jobID string) (*job.Dia
 	if err != nil {
 		return nil, err
 	}
-	c.setAuth(req)
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return nil, err
@@ -226,7 +216,6 @@ func (c *HTTPClient) GetLogTail(ctx context.Context, jobID string, lines int) (s
 	if err != nil {
 		return "", err
 	}
-	c.setAuth(req)
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return "", err
@@ -258,7 +247,6 @@ func (c *HTTPClient) StreamEvents(ctx context.Context, jobID string, since int64
 	if err != nil {
 		return err
 	}
-	c.setAuth(req)
 
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
@@ -329,14 +317,4 @@ func (c *HTTPClient) httpClient() *http.Client {
 		return c.Client
 	}
 	return http.DefaultClient
-}
-
-func (c *HTTPClient) setAuth(req *http.Request) {
-	header := c.AuthHeader
-	if header == "" {
-		header = defaultAuthHeader
-	}
-	if strings.TrimSpace(c.Token) != "" {
-		req.Header.Set(header, c.Token)
-	}
 }

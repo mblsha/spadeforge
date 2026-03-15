@@ -25,8 +25,6 @@ func runTUI(args []string) error {
 	discoverTimeout := fs.Duration("discover-timeout", 2*time.Second, "mDNS auto-discovery timeout")
 	discoverService := fs.String("discover-service", "_spadeloader._tcp", "mDNS service name used for discovery")
 	discoverDomain := fs.String("discover-domain", discovery.DefaultDomain, "mDNS discovery domain")
-	token := fs.String("token", strings.TrimSpace(os.Getenv("SPADELOADER_TOKEN")), "auth token")
-	authHeader := fs.String("auth-header", envWithFallback("SPADELOADER_AUTH_HEADER", "X-Build-Token"), "auth header")
 	limit := fs.Int("limit", 100, "max number of jobs to show")
 	refresh := fs.Duration("refresh", 1500*time.Millisecond, "job list refresh interval")
 	reflashTimeout := fs.Duration("reflash-timeout", 30*time.Second, "timeout for creating a reflash job")
@@ -41,9 +39,7 @@ func runTUI(args []string) error {
 	}
 
 	c := &client.HTTPClient{
-		BaseURL:    resolvedServerURL,
-		Token:      strings.TrimSpace(*token),
-		AuthHeader: strings.TrimSpace(*authHeader),
+		BaseURL: resolvedServerURL,
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -76,11 +72,4 @@ func resolveTUIServerURL(explicit string, discover bool, timeout time.Duration, 
 		return "", fmt.Errorf("discover server via mDNS: %w", err)
 	}
 	return endpoint.URL, nil
-}
-
-func envWithFallback(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return fallback
 }

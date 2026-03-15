@@ -187,9 +187,7 @@ func runServerTUI(args []string) error {
 	}()
 
 	c := &client.HTTPClient{
-		BaseURL:    localServerURL,
-		Token:      cfg.Token,
-		AuthHeader: cfg.AuthHeader,
+		BaseURL: localServerURL,
 	}
 	uiErr := loaderui.Run(uiCtx, loaderui.Options{
 		Client:               c,

@@ -20,7 +20,6 @@ import (
 func TestClientServer_ProgressAndArtifacts(t *testing.T) {
 	cfg := config.Default()
 	cfg.BaseDir = t.TempDir()
-	cfg.Token = "secret"
 	cfg.WorkerTimeout = 5 * time.Second
 
 	block := make(chan struct{})
@@ -54,7 +53,7 @@ func TestClientServer_ProgressAndArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cli := &HTTPClient{BaseURL: ts.URL, Token: cfg.Token, AuthHeader: cfg.AuthHeader}
+	cli := &HTTPClient{BaseURL: ts.URL}
 	jobID, err := cli.SubmitBundle(context.Background(), bundle)
 	if err != nil {
 		t.Fatal(err)

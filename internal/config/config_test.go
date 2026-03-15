@@ -10,9 +10,6 @@ func TestConfig_Defaults(t *testing.T) {
 	if cfg.ListenAddr == "" {
 		t.Fatalf("expected default listen addr")
 	}
-	if cfg.AuthHeader == "" {
-		t.Fatalf("expected default auth header")
-	}
 	if cfg.MaxUploadBytes <= 0 {
 		t.Fatalf("expected MaxUploadBytes > 0")
 	}

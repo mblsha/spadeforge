@@ -40,9 +40,6 @@ func runFlash(args []string) error {
 	discoverService := fs.String("discover-service", "_spadeloader._tcp", "mDNS service name used for discovery")
 	discoverDomain := fs.String("discover-domain", discovery.DefaultDomain, "mDNS discovery domain")
 
-	token := fs.String("token", strings.TrimSpace(os.Getenv("SPADELOADER_TOKEN")), "auth token")
-	authHeader := fs.String("auth-header", defaultString(os.Getenv("SPADELOADER_AUTH_HEADER"), "X-Build-Token"), "auth header")
-
 	board := fs.String("board", "", "fpga board name (example: alchitry_au)")
 	designName := fs.String("name", "", "human-readable design name")
 	bitstream := fs.String("bitstream", "", "bitstream file path (.bit)")
@@ -69,7 +66,7 @@ func runFlash(args []string) error {
 		return err
 	}
 
-	c := &client.HTTPClient{BaseURL: resolvedServerURL, Token: *token, AuthHeader: *authHeader}
+	c := &client.HTTPClient{BaseURL: resolvedServerURL}
 	ctx := context.Background()
 	jobID, err := c.SubmitFlash(ctx, client.SubmitRequest{
 		Board:         strings.TrimSpace(*board),

@@ -99,28 +99,8 @@ func TestSubmitJob_FailureIncludesLogsOnly(t *testing.T) {
 	}
 }
 
-func TestSubmitJob_RejectsMissingToken(t *testing.T) {
-	ts, _, _, cancel := newTestServer(t, &builder.FakeBuilder{})
-	defer cancel()
-
-	body, contentType := multipartBody(t, validBundleBytes(t, "ok"))
-	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/jobs", &body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", contentType)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", resp.StatusCode)
-	}
-}
-
 func TestSubmitJob_RejectsMissingProject(t *testing.T) {
-	ts, cfg, _, cancel := newTestServer(t, &builder.FakeBuilder{})
+	ts, _, _, cancel := newTestServer(t, &builder.FakeBuilder{})
 	defer cancel()
 
 	body, contentType := multipartBody(t, validBundleBytes(t, ""))
@@ -129,7 +109,6 @@ func TestSubmitJob_RejectsMissingProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", contentType)
-	req.Header.Set(cfg.AuthHeader, cfg.Token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -166,7 +145,6 @@ func TestJobStatus_ExposesStepAndHeartbeat(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		req.Header.Set(cfg.AuthHeader, cfg.Token)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -206,7 +184,6 @@ func TestDiagnosticsEndpoint_ReturnsParsedErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set(cfg.AuthHeader, cfg.Token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -237,7 +214,6 @@ func TestTailEndpoint_ReturnsLastNLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set(cfg.AuthHeader, cfg.Token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -267,7 +243,6 @@ func TestEventsEndpoint_StreamsBacklog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set(cfg.AuthHeader, cfg.Token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -302,14 +277,13 @@ func TestKillAllVivado_ExecFailureReturnsServerError(t *testing.T) {
 		execCommand = origExecCommand
 	})
 
-	ts, cfg, _, cancel := newTestServer(t, &builder.FakeBuilder{})
+	ts, _, _, cancel := newTestServer(t, &builder.FakeBuilder{})
 	defer cancel()
 
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/kill-all-vivado", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set(cfg.AuthHeader, cfg.Token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -335,7 +309,6 @@ func newTestServer(t *testing.T, b builder.Builder) (*httptest.Server, config.Co
 	t.Helper()
 	cfg := config.Default()
 	cfg.BaseDir = t.TempDir()
-	cfg.Token = "secret"
 	cfg.WorkerTimeout = 5 * time.Second
 
 	st := store.New(cfg)
@@ -361,7 +334,6 @@ func submitBundle(t *testing.T, baseURL string, cfg config.Config, bundle []byte
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", contentType)
-	req.Header.Set(cfg.AuthHeader, cfg.Token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -391,7 +363,6 @@ func waitForJobTerminalHTTP(t *testing.T, baseURL string, cfg config.Config, job
 		if err != nil {
 			t.Fatal(err)
 		}
-		req.Header.Set(cfg.AuthHeader, cfg.Token)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -422,7 +393,6 @@ func downloadArtifacts(t *testing.T, baseURL string, cfg config.Config, jobID st
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set(cfg.AuthHeader, cfg.Token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
