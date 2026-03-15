@@ -56,22 +56,8 @@ func (a *API) guard(next http.Handler) http.Handler {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
 			return
 		}
-		if err := a.checkToken(r); err != nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
-			return
-		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-func (a *API) checkToken(r *http.Request) error {
-	if strings.TrimSpace(a.cfg.Token) == "" {
-		return nil
-	}
-	if strings.TrimSpace(r.Header.Get(a.cfg.AuthHeader)) != a.cfg.Token {
-		return errors.New("invalid token")
-	}
-	return nil
 }
 
 func (a *API) checkAllowlist(r *http.Request) error {

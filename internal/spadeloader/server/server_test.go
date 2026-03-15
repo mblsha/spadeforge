@@ -160,44 +160,6 @@ func TestSubmitValidation(t *testing.T) {
 	}
 }
 
-func TestTokenGuard(t *testing.T) {
-	t.Parallel()
-
-	cfg := loaderconfig.Default()
-	cfg.BaseDir = t.TempDir()
-	cfg.Token = "secret"
-
-	st := store.New(cfg)
-	hs := history.New(cfg.HistoryPath(), cfg.HistoryLimit)
-	mgr := queue.New(cfg, st, &flasher.FakeFlasher{}, hs)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := mgr.Start(ctx); err != nil {
-		t.Fatalf("Start() error: %v", err)
-	}
-
-	api := New(cfg, mgr)
-	ts := httptest.NewServer(api.Handler())
-	defer ts.Close()
-
-	status, _ := submitJob(t, ts.URL, "alchitry_au", "Blink", "design.bit", []byte("bitstream"), "", "")
-	if status != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want %d", status, http.StatusUnauthorized)
-	}
-
-	status, body := submitJob(t, ts.URL, "alchitry_au", "Blink", "design.bit", []byte("bitstream"), cfg.AuthHeader, "secret")
-	if status != http.StatusAccepted {
-		t.Fatalf("status = %d, want %d", status, http.StatusAccepted)
-	}
-	var submitResp map[string]string
-	if err := json.Unmarshal([]byte(body), &submitResp); err != nil {
-		t.Fatalf("decode submit response: %v", err)
-	}
-	if jobID := strings.TrimSpace(submitResp["job_id"]); jobID != "" {
-		_ = waitForTerminalHTTP(t, ts.URL, jobID, cfg.AuthHeader, cfg.Token)
-	}
-}
-
 func TestBoardAllowlistGuard(t *testing.T) {
 	t.Parallel()
 
@@ -365,9 +327,6 @@ func submitJob(t *testing.T, baseURL, board, designName, filename string, bitstr
 		t.Fatalf("NewRequest error: %v", err)
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
-	if authHeader != "" && token != "" {
-		req.Header.Set(authHeader, token)
-	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -390,9 +349,6 @@ func waitForTerminalHTTP(t *testing.T, baseURL, jobID, authHeader, token string)
 		req, err := http.NewRequest(http.MethodGet, baseURL+"/v1/jobs/"+jobID, nil)
 		if err != nil {
 			t.Fatalf("NewRequest error: %v", err)
-		}
-		if authHeader != "" && token != "" {
-			req.Header.Set(authHeader, token)
 		}
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
