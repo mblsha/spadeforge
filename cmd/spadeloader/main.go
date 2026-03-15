@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -23,6 +25,14 @@ import (
 	"github.com/mblsha/spadeforge/internal/spadeloader/server"
 	"github.com/mblsha/spadeforge/internal/spadeloader/store"
 	loaderui "github.com/mblsha/spadeforge/internal/spadeloader/tui"
+)
+
+const (
+	embeddedServerStartupTimeout   = 3 * time.Second
+	embeddedServerStartupInterval  = 50 * time.Millisecond
+	embeddedServerHealthInterval   = 1 * time.Second
+	embeddedServerHealthMaxFailure = 3
+	embeddedServerProbeTimeout     = 500 * time.Millisecond
 )
 
 func main() {
@@ -149,19 +159,30 @@ func runServerTUI(args []string) error {
 		_ = httpServer.Close()
 		return err
 	}
+	startupCtx, cancelStartup := context.WithTimeout(rootCtx, embeddedServerStartupTimeout)
+	defer cancelStartup()
+	if err := waitForServerHealthy(startupCtx, localServerURL, errCh, probeServerHealth, embeddedServerStartupInterval); err != nil {
+		_ = httpServer.Close()
+		return err
+	}
 
 	uiCtx, cancelUI := context.WithCancel(rootCtx)
 	defer cancelUI()
-	serverErrCh := make(chan error, 1)
+	fatalErrCh := make(chan error, 1)
 	go func() {
 		err := <-errCh
 		if err == nil || errors.Is(err, http.ErrServerClosed) {
 			return
 		}
-		select {
-		case serverErrCh <- err:
-		default:
+		sendFatalError(fatalErrCh, fmt.Errorf("embedded spadeloader http server stopped: %w", err))
+		cancelUI()
+	}()
+	go func() {
+		err := <-monitorServerHealth(uiCtx, localServerURL, probeServerHealth, embeddedServerHealthInterval, embeddedServerHealthMaxFailure)
+		if err == nil {
+			return
 		}
+		sendFatalError(fatalErrCh, err)
 		cancelUI()
 	}()
 
@@ -181,7 +202,7 @@ func runServerTUI(args []string) error {
 	_ = httpServer.Close()
 
 	select {
-	case err := <-serverErrCh:
+	case err := <-fatalErrCh:
 		return err
 	default:
 	}
@@ -257,6 +278,138 @@ func isLoopbackListenHost(host string) bool {
 	}
 	ip := net.ParseIP(lowered)
 	return ip != nil && ip.IsLoopback()
+}
+
+type healthProbeFunc func(context.Context, string) error
+
+func waitForServerHealthy(ctx context.Context, serverURL string, serverErr <-chan error, probe healthProbeFunc, interval time.Duration) error {
+	if probe == nil {
+		return errors.New("health probe is required")
+	}
+	if interval <= 0 {
+		interval = embeddedServerStartupInterval
+	}
+
+	var lastErr error
+	for {
+		probeCtx, cancel := context.WithTimeout(ctx, embeddedServerProbeTimeout)
+		err := probe(probeCtx, serverURL)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+
+		select {
+		case err := <-serverErr:
+			if err == nil || errors.Is(err, http.ErrServerClosed) {
+				continue
+			}
+			return fmt.Errorf("embedded spadeloader http server failed before becoming healthy: %w", err)
+		case <-ctx.Done():
+			if lastErr == nil {
+				return fmt.Errorf("embedded spadeloader http server did not become healthy at %s", healthEndpointURL(serverURL))
+			}
+			return fmt.Errorf("embedded spadeloader http server did not become healthy at %s: %w", healthEndpointURL(serverURL), lastErr)
+		case <-time.After(interval):
+		}
+	}
+}
+
+func monitorServerHealth(ctx context.Context, serverURL string, probe healthProbeFunc, interval time.Duration, maxFailures int) <-chan error {
+	ch := make(chan error, 1)
+	go func() {
+		defer close(ch)
+		if probe == nil {
+			ch <- errors.New("health probe is required")
+			return
+		}
+		if interval <= 0 {
+			interval = embeddedServerHealthInterval
+		}
+		if maxFailures <= 0 {
+			maxFailures = embeddedServerHealthMaxFailure
+		}
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		failures := 0
+		var lastErr error
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+
+			probeCtx, cancel := context.WithTimeout(ctx, embeddedServerProbeTimeout)
+			err := probe(probeCtx, serverURL)
+			cancel()
+			if err == nil {
+				failures = 0
+				lastErr = nil
+				continue
+			}
+
+			failures++
+			lastErr = err
+			if failures < maxFailures {
+				continue
+			}
+
+			ch <- fmt.Errorf(
+				"embedded spadeloader http server became unreachable at %s after %d consecutive health check failures: %w",
+				healthEndpointURL(serverURL),
+				failures,
+				lastErr,
+			)
+			return
+		}
+	}()
+	return ch
+}
+
+func probeServerHealth(ctx context.Context, serverURL string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthEndpointURL(serverURL), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("healthz returned status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func healthEndpointURL(serverURL string) string {
+	base := strings.TrimSpace(serverURL)
+	if base == "" {
+		return "/healthz"
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return strings.TrimRight(base, "/") + "/healthz"
+	}
+	u.Path = "/healthz"
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
+func sendFatalError(ch chan<- error, err error) {
+	if err == nil {
+		return
+	}
+	select {
+	case ch <- err:
+	default:
+	}
 }
 
 func resolveOpenFPGALoaderBin(bin string) (string, error) {
