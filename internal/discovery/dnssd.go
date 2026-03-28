@@ -5,12 +5,12 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"net/http"
 	"os/exec"
 	"strconv"
 	"strings"
-	"time"
 )
+
+var lookupBonjourHostIPs = net.LookupIP
 
 func discoverWithDNSSD(ctx context.Context, service, domain string) (Endpoint, error) {
 	service = strings.TrimSpace(service)
@@ -62,12 +62,10 @@ func discoverWithDNSSD(ctx context.Context, service, domain string) (Endpoint, e
 		if err != nil {
 			continue
 		}
-		if endpointHealthy(ctx, endpoint.URL) {
-			seenInstances[instance] = struct{}{}
-			cancel()
-			<-waitCh
-			return endpoint, nil
-		}
+		seenInstances[instance] = struct{}{}
+		cancel()
+		<-waitCh
+		return endpoint, nil
 	}
 
 	if scanErr := scanner.Err(); scanErr != nil {
@@ -105,18 +103,9 @@ func resolveDNSSDEndpointForInstance(ctx context.Context, instance, service, dom
 	if err != nil {
 		return Endpoint{}, err
 	}
-	normalizedHost := normalizeBonjourHost(host)
-	if normalizedHost == "" {
-		return Endpoint{}, fmt.Errorf("dns-sd resolved no usable host")
-	}
-
-	urlHost := normalizedHost
-	if ip := net.ParseIP(normalizedHost); ip != nil {
-		if ip.To4() != nil {
-			urlHost = ip.String()
-		} else {
-			urlHost = "[" + ip.String() + "]"
-		}
+	normalizedHost, urlHost, err := resolveDNSSDEndpointHosts(host)
+	if err != nil {
+		return Endpoint{}, err
 	}
 	return Endpoint{
 		URL:      fmt.Sprintf("http://%s:%d", urlHost, port),
@@ -126,20 +115,44 @@ func resolveDNSSDEndpointForInstance(ctx context.Context, instance, service, dom
 	}, nil
 }
 
-func endpointHealthy(ctx context.Context, baseURL string) bool {
-	checkCtx, cancel := context.WithTimeout(ctx, 600*time.Millisecond)
-	defer cancel()
+func resolveDNSSDEndpointHosts(host string) (string, string, error) {
+	normalizedHost := normalizeBonjourHost(host)
+	if normalizedHost == "" {
+		return "", "", fmt.Errorf("dns-sd resolved no usable host")
+	}
 
-	req, err := http.NewRequestWithContext(checkCtx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/healthz", nil)
-	if err != nil {
-		return false
+	if ip := net.ParseIP(normalizedHost); ip != nil {
+		return normalizedHost, formatURLHost(ip), nil
 	}
-	resp, err := http.DefaultClient.Do(req)
+
+	ips, err := lookupBonjourHostIPs(normalizedHost)
 	if err != nil {
-		return false
+		return "", "", fmt.Errorf("resolve bonjour host %q: %w", normalizedHost, err)
 	}
-	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+
+	ip := pickResolvedEndpointIP(ips)
+	if ip == nil {
+		return "", "", fmt.Errorf("bonjour host %q resolved to no usable ips", normalizedHost)
+	}
+	return normalizedHost, formatURLHost(ip), nil
+}
+
+func pickResolvedEndpointIP(ips []net.IP) net.IP {
+	var ipv4 []net.IP
+	var ipv6 []net.IP
+
+	for _, ip := range ips {
+		if !validAdvertisedIP(ip) || ip.IsLoopback() {
+			continue
+		}
+		if ip4 := ip.To4(); ip4 != nil {
+			ipv4 = append(ipv4, ip4)
+			continue
+		}
+		ipv6 = append(ipv6, ip)
+	}
+
+	return pickIP(ipv4, ipv6)
 }
 
 func runDNSSDForFirstValue(

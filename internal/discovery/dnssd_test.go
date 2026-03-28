@@ -42,14 +42,14 @@ func TestParseDNSSDAddressLine(t *testing.T) {
 	}{
 		{
 			name: "ipv4",
-			line: "13:20:17.187  Add  40000003      25  koubou.local.                          192.168.50.86                                4500",
-			want: net.ParseIP("192.168.50.86"),
+			line: "13:20:17.187  Add  40000003      25  koubou.local.                          192.0.2.10                                   4500",
+			want: net.ParseIP("192.0.2.10"),
 			ok:   true,
 		},
 		{
 			name: "ipv6 with zone",
-			line: "13:20:17.187  Add  40000003      24  koubou.local.                          FE80:0000:0000:0000:008C:BFC8:9632:C3B2%en1  4500",
-			want: net.ParseIP("fe80::8c:bfc8:9632:c3b2"),
+			line: "13:20:17.187  Add  40000003      24  koubou.local.                          FE80:0000:0000:0000:0000:0000:0000:0010%en1  4500",
+			want: net.ParseIP("fe80::10"),
 			ok:   true,
 		},
 		{
@@ -74,6 +74,49 @@ func TestParseDNSSDAddressLine(t *testing.T) {
 				t.Fatalf("ip = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveDNSSDEndpointHosts_PrefersIPv4LiteralURL(t *testing.T) {
+	originalLookup := lookupBonjourHostIPs
+	lookupBonjourHostIPs = func(host string) ([]net.IP, error) {
+		if host != "koubou.local" {
+			t.Fatalf("lookup host = %q, want %q", host, "koubou.local")
+		}
+		return []net.IP{
+			net.ParseIP("fe80::10"),
+			net.ParseIP("169.254.10.20"),
+			net.ParseIP("192.0.2.10"),
+			net.ParseIP("2001:db8::10"),
+			net.ParseIP("198.51.100.10"),
+		}, nil
+	}
+	t.Cleanup(func() {
+		lookupBonjourHostIPs = originalLookup
+	})
+
+	hostName, urlHost, err := resolveDNSSDEndpointHosts("koubou.local.local.")
+	if err != nil {
+		t.Fatalf("resolveDNSSDEndpointHosts() error: %v", err)
+	}
+	if hostName != "koubou.local" {
+		t.Fatalf("hostName = %q, want %q", hostName, "koubou.local")
+	}
+	if urlHost != "192.0.2.10" {
+		t.Fatalf("urlHost = %q, want %q", urlHost, "192.0.2.10")
+	}
+}
+
+func TestResolveDNSSDEndpointHosts_IPv6Literal(t *testing.T) {
+	hostName, urlHost, err := resolveDNSSDEndpointHosts("2001:db8::42")
+	if err != nil {
+		t.Fatalf("resolveDNSSDEndpointHosts() error: %v", err)
+	}
+	if hostName != "2001:db8::42" {
+		t.Fatalf("hostName = %q, want %q", hostName, "2001:db8::42")
+	}
+	if urlHost != "[2001:db8::42]" {
+		t.Fatalf("urlHost = %q, want %q", urlHost, "[2001:db8::42]")
 	}
 }
 
