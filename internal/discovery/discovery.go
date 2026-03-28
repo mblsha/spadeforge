@@ -106,12 +106,8 @@ func EndpointFromEntry(entry ServiceEntry) (Endpoint, bool) {
 	if ip == nil {
 		return Endpoint{}, false
 	}
-	host := ip.String()
-	if ip.To4() == nil {
-		host = "[" + host + "]"
-	}
 	return Endpoint{
-		URL:      "http://" + host + ":" + strconv.Itoa(entry.Port),
+		URL:      "http://" + formatURLHost(ip) + ":" + strconv.Itoa(entry.Port),
 		Instance: entry.Instance,
 		HostName: entry.HostName,
 		Port:     entry.Port,
@@ -195,6 +191,16 @@ func primaryAdvertiseIPForListenHost(listenHost string) net.IP {
 
 func pickIP(ipv4 []net.IP, ipv6 []net.IP) net.IP {
 	for _, ip := range ipv4 {
+		if validAdvertisedIP(ip) && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
+			return ip
+		}
+	}
+	for _, ip := range ipv6 {
+		if validAdvertisedIP(ip) && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
+			return ip
+		}
+	}
+	for _, ip := range ipv4 {
 		if validAdvertisedIP(ip) && !ip.IsLoopback() {
 			return ip
 		}
@@ -219,4 +225,11 @@ func pickIP(ipv4 []net.IP, ipv6 []net.IP) net.IP {
 
 func validAdvertisedIP(ip net.IP) bool {
 	return ip != nil && !ip.IsUnspecified()
+}
+
+func formatURLHost(ip net.IP) string {
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4.String()
+	}
+	return "[" + ip.String() + "]"
 }

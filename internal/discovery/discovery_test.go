@@ -13,14 +13,14 @@ func TestEndpointFromEntry_PrefersNonLoopbackIPv4(t *testing.T) {
 		Instance: "spadeforge",
 		HostName: "host.local.",
 		Port:     8080,
-		IPv4:     []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("192.168.1.10")},
+		IPv4:     []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("169.254.9.10"), net.ParseIP("198.51.100.10")},
 		IPv6:     []net.IP{net.ParseIP("::1")},
 	}
 	ep, ok := EndpointFromEntry(entry)
 	if !ok {
 		t.Fatalf("expected endpoint")
 	}
-	if ep.URL != "http://192.168.1.10:8080" {
+	if ep.URL != "http://198.51.100.10:8080" {
 		t.Fatalf("unexpected url: %s", ep.URL)
 	}
 }
@@ -30,13 +30,30 @@ func TestEndpointFromEntry_UsesBracketedIPv6(t *testing.T) {
 		Instance: "spadeforge",
 		HostName: "host.local.",
 		Port:     8080,
-		IPv6:     []net.IP{net.ParseIP("fd00::10")},
+		IPv6:     []net.IP{net.ParseIP("2001:db8::10")},
 	}
 	ep, ok := EndpointFromEntry(entry)
 	if !ok {
 		t.Fatalf("expected endpoint")
 	}
-	if ep.URL != "http://[fd00::10]:8080" {
+	if ep.URL != "http://[2001:db8::10]:8080" {
+		t.Fatalf("unexpected url: %s", ep.URL)
+	}
+}
+
+func TestEndpointFromEntry_PrefersRoutableIPv6OverLinkLocalIPv4(t *testing.T) {
+	entry := ServiceEntry{
+		Instance: "spadeforge",
+		HostName: "host.local.",
+		Port:     8080,
+		IPv4:     []net.IP{net.ParseIP("169.254.9.10")},
+		IPv6:     []net.IP{net.ParseIP("fe80::10"), net.ParseIP("2001:db8::10")},
+	}
+	ep, ok := EndpointFromEntry(entry)
+	if !ok {
+		t.Fatalf("expected endpoint")
+	}
+	if ep.URL != "http://[2001:db8::10]:8080" {
 		t.Fatalf("unexpected url: %s", ep.URL)
 	}
 }
@@ -76,15 +93,15 @@ func TestPrimaryAdvertiseAddrForListenHost(t *testing.T) {
 	}{
 		{
 			name:       "ipv4 literal",
-			listenHost: "192.168.1.20",
+			listenHost: "198.51.100.20",
 			port:       8080,
-			want:       "192.168.1.20:8080",
+			want:       "198.51.100.20:8080",
 		},
 		{
 			name:       "ipv6 literal",
-			listenHost: "fd00::42",
+			listenHost: "2001:db8::42",
 			port:       8081,
-			want:       "[fd00::42]:8081",
+			want:       "[2001:db8::42]:8081",
 		},
 		{
 			name:       "loopback host rejected",
@@ -94,7 +111,7 @@ func TestPrimaryAdvertiseAddrForListenHost(t *testing.T) {
 		},
 		{
 			name:       "invalid port",
-			listenHost: "192.168.1.20",
+			listenHost: "198.51.100.20",
 			port:       0,
 			expectErr:  true,
 		},
@@ -126,7 +143,7 @@ func TestDiscoverWithBrowser_FindsEndpoint(t *testing.T) {
 		Instance: "spadeforge",
 		HostName: "host.local.",
 		Port:     8080,
-		IPv4:     []net.IP{net.ParseIP("10.0.0.5")},
+		IPv4:     []net.IP{net.ParseIP("198.51.100.5")},
 	}}}
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -134,7 +151,7 @@ func TestDiscoverWithBrowser_FindsEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discover failed: %v", err)
 	}
-	if ep.URL != "http://10.0.0.5:8080" {
+	if ep.URL != "http://198.51.100.5:8080" {
 		t.Fatalf("unexpected url: %s", ep.URL)
 	}
 }
@@ -168,7 +185,7 @@ func TestDiscoverWithBrowser_BrowseReturnsImmediatelyStillFindsEntry(t *testing.
 			Instance: "spadeforge",
 			HostName: "host.local.",
 			Port:     8080,
-			IPv4:     []net.IP{net.ParseIP("10.0.0.11")},
+			IPv4:     []net.IP{net.ParseIP("198.51.100.11")},
 		}},
 		asyncDelay: 10 * time.Millisecond,
 	}
@@ -178,7 +195,7 @@ func TestDiscoverWithBrowser_BrowseReturnsImmediatelyStillFindsEntry(t *testing.
 	if err != nil {
 		t.Fatalf("discover failed: %v", err)
 	}
-	if endpoint.URL != "http://10.0.0.11:8080" {
+	if endpoint.URL != "http://198.51.100.11:8080" {
 		t.Fatalf("unexpected url: %s", endpoint.URL)
 	}
 }
