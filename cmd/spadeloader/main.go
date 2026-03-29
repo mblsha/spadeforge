@@ -248,17 +248,21 @@ func localServerURLForClient(listenAddr string) (string, error) {
 	if trimmedHost == "" {
 		trimmedHost = "127.0.0.1"
 	}
-	if idx := strings.IndexByte(trimmedHost, '%'); idx >= 0 {
-		trimmedHost = trimmedHost[:idx]
+	parseHost := trimmedHost
+	if idx := strings.IndexByte(parseHost, '%'); idx >= 0 {
+		parseHost = parseHost[:idx]
 	}
-	if ip := net.ParseIP(trimmedHost); ip != nil && ip.IsUnspecified() {
+	if ip := net.ParseIP(parseHost); ip != nil && ip.IsUnspecified() {
 		trimmedHost = "127.0.0.1"
 	}
 	if strings.EqualFold(trimmedHost, "localhost") {
 		trimmedHost = "127.0.0.1"
 	}
 
-	return "http://" + net.JoinHostPort(trimmedHost, fmt.Sprintf("%d", port)), nil
+	return (&url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort(trimmedHost, fmt.Sprintf("%d", port)),
+	}).String(), nil
 }
 
 func isLoopbackListenHost(host string) bool {

@@ -304,6 +304,9 @@ func (a *API) handleGetEvents(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(": keepalive\n\n"))
 			flusher.Flush()
 			if rec, ok := a.manager.Get(jobID); !ok || rec.Terminal() {
+				if err := drainBufferedSSEEvents(w, flusher, ch); err != nil {
+					return
+				}
 				return
 			}
 		case ev, ok := <-ch:
@@ -317,6 +320,26 @@ func (a *API) handleGetEvents(w http.ResponseWriter, r *http.Request) {
 			if ev.Terminal() {
 				return
 			}
+		}
+	}
+}
+
+func drainBufferedSSEEvents(w http.ResponseWriter, flusher http.Flusher, ch <-chan job.Event) error {
+	if ch == nil {
+		return nil
+	}
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			if err := writeSSEEvent(w, ev); err != nil {
+				return err
+			}
+			flusher.Flush()
+		default:
+			return nil
 		}
 	}
 }

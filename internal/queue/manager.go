@@ -153,11 +153,20 @@ func (m *Manager) KillJob(jobID string) error {
 		return fmt.Errorf("job %s is already in terminal state %s", jobID, rec.State)
 	}
 	cancel, ok := m.cancels[jobID]
-	if !ok {
-		return fmt.Errorf("job %s is queued but not yet running", jobID)
+	if ok {
+		log.Printf("%s kill requested", jobLogPrefix(rec.ID, rec.Manifest.Project))
+		cancel()
+		return nil
 	}
-	log.Printf("%s kill requested", jobLogPrefix(rec.ID, rec.Manifest.Project))
-	cancel()
+	if rec.State != job.StateQueued {
+		return fmt.Errorf("job %s cannot be killed in state %s", jobID, rec.State)
+	}
+	if err := m.killQueuedJobLocked(rec, time.Now()); err != nil {
+		return err
+	}
+	_ = m.store.Save(rec)
+	m.emitEventLocked(rec, "failed")
+	log.Printf("%s kill requested while queued", jobLogPrefix(rec.ID, rec.Manifest.Project))
 	return nil
 }
 
@@ -389,6 +398,22 @@ func (m *Manager) startJobLocked(rec *job.Record, now time.Time, cancel context.
 	}
 	rec.CurrentStep = "launch"
 	m.cancels[rec.ID] = cancel
+	return nil
+}
+
+func (m *Manager) killQueuedJobLocked(rec *job.Record, now time.Time) error {
+	if rec == nil {
+		return errors.New("job record is required")
+	}
+	if rec.State != job.StateQueued {
+		return fmt.Errorf("job %s is not queued", rec.ID)
+	}
+	if err := rec.MarkFailed(now, "build canceled before start", context.Canceled, 130); err != nil {
+		return err
+	}
+	rec.CurrentStep = "failed"
+	rec.FailureKind = ""
+	rec.FailureSummary = ""
 	return nil
 }
 

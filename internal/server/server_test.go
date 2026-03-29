@@ -268,6 +268,28 @@ func TestEventsEndpoint_StreamsBacklog(t *testing.T) {
 	}
 }
 
+func TestDrainBufferedSSEEvents_WritesBufferedTerminalEvent(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	ch := make(chan job.Event, 2)
+	ch <- job.Event{Seq: 1, JobID: "job1", Type: "progress", State: job.StateRunning, Message: "running"}
+	ch <- job.Event{Seq: 2, JobID: "job1", Type: "failed", State: job.StateFailed, Message: "failed"}
+
+	if err := drainBufferedSSEEvents(recorder, recorder, ch); err != nil {
+		t.Fatalf("drainBufferedSSEEvents() error: %v", err)
+	}
+
+	payload := recorder.Body.String()
+	if !strings.Contains(payload, "event: progress") {
+		t.Fatalf("expected progress event in payload, got %q", payload)
+	}
+	if !strings.Contains(payload, "event: failed") {
+		t.Fatalf("expected failed event in payload, got %q", payload)
+	}
+	if !strings.Contains(payload, "\"state\":\"FAILED\"") {
+		t.Fatalf("expected FAILED state in payload, got %q", payload)
+	}
+}
+
 func TestKillAllVivado_ExecFailureReturnsServerError(t *testing.T) {
 	origExecCommand := execCommand
 	execCommand = func(name string, args ...string) *exec.Cmd {
