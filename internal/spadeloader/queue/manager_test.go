@@ -47,6 +47,12 @@ func TestManagerSubmitAndProcessSuccess(t *testing.T) {
 	if rec.State != job.StateQueued {
 		t.Fatalf("Submit() state = %s, want %s", rec.State, job.StateQueued)
 	}
+	if rec.OriginalSubmittedAt.IsZero() {
+		t.Fatalf("Submit() original submitted at should be set")
+	}
+	if !rec.OriginalSubmittedAt.Equal(rec.CreatedAt) {
+		t.Fatalf("Submit() original submitted at = %s, want %s", rec.OriginalSubmittedAt, rec.CreatedAt)
+	}
 
 	finished := waitForTerminal(t, mgr, rec.ID, 3*time.Second)
 	if finished.State != job.StateSucceeded {
@@ -272,6 +278,9 @@ func TestManagerReflash(t *testing.T) {
 	}
 	if reflashed.Board != original.Board || reflashed.DesignName != original.DesignName {
 		t.Fatalf("unexpected reflash metadata: board=%q design=%q", reflashed.Board, reflashed.DesignName)
+	}
+	if !reflashed.EffectiveOriginalSubmittedAt().Equal(original.CreatedAt) {
+		t.Fatalf("reflashed original submitted at = %s, want %s", reflashed.EffectiveOriginalSubmittedAt(), original.CreatedAt)
 	}
 	waitForTerminal(t, mgr, reflashed.ID, 3*time.Second)
 

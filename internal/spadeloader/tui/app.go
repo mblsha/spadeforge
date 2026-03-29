@@ -217,7 +217,7 @@ func (m model) View() string {
 		if i == m.selectedIdx {
 			prefix = "> "
 		}
-		created := rec.CreatedAt.Local().Format("2006-01-02 15:04:05")
+		created := displayTimestamp(rec)
 		line := fmt.Sprintf(
 			"%s%s  %-12s  %-24s  %-10s  %s",
 			prefix,
@@ -472,6 +472,15 @@ func bitstreamKey(rec job.Record) string {
 	b.WriteByte('|')
 	b.WriteString(name)
 	return b.String()
+}
+
+func displayTimestamp(rec job.Record) string {
+	created := rec.CreatedAt.Local().Format("2006-01-02 15:04:05")
+	original := rec.EffectiveOriginalSubmittedAt()
+	if original.IsZero() || original.Equal(rec.CreatedAt) {
+		return created
+	}
+	return fmt.Sprintf("%s [orig %s]", created, original.Local().Format("2006-01-02 15:04:05"))
 }
 
 func trimToWidth(in string, width int) string {

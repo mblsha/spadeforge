@@ -295,6 +295,13 @@ func TestListJobsAndReflash(t *testing.T) {
 	if listPayload2.Items[0].ID != reflashedJobID {
 		t.Fatalf("items[0].ID = %q, want %q", listPayload2.Items[0].ID, reflashedJobID)
 	}
+	if !listPayload2.Items[0].EffectiveOriginalSubmittedAt().Equal(listPayload2.Items[1].CreatedAt) {
+		t.Fatalf(
+			"items[0].original_submitted_at = %s, want %s",
+			listPayload2.Items[0].EffectiveOriginalSubmittedAt(),
+			listPayload2.Items[1].CreatedAt,
+		)
+	}
 	if listPayload2.Items[1].ID != sourceJobID {
 		t.Fatalf("items[1].ID = %q, want %q", listPayload2.Items[1].ID, sourceJobID)
 	}

@@ -198,3 +198,22 @@ func TestViewShowsZeroconfPrimaryInHeader(t *testing.T) {
 		t.Fatalf("view missing zeroconf primary header, got:\n%s", view)
 	}
 }
+
+func TestDisplayTimestampShowsOriginalSubmittedAtForReflashedJob(t *testing.T) {
+	t.Parallel()
+
+	original := time.Date(2026, time.March, 14, 8, 30, 0, 0, time.Local)
+	reflashed := original.Add(2 * time.Hour)
+
+	got := displayTimestamp(job.Record{
+		CreatedAt:           reflashed,
+		OriginalSubmittedAt: original,
+	})
+
+	if !strings.Contains(got, reflashed.Format("2006-01-02 15:04:05")) {
+		t.Fatalf("displayTimestamp() missing latest timestamp, got %q", got)
+	}
+	if !strings.Contains(got, "orig "+original.Format("2006-01-02 15:04:05")) {
+		t.Fatalf("displayTimestamp() missing original timestamp, got %q", got)
+	}
+}

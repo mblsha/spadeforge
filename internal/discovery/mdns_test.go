@@ -32,6 +32,29 @@ func TestIsWildcardListenHost(t *testing.T) {
 	}
 }
 
+func TestIsDNSSDRegistrationActiveLine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		line string
+		want bool
+	}{
+		{line: "11:11:16.763  Got a reply for service sdmanual._sdmanual._tcp.local.: Name now registered and active", want: true},
+		{line: "11:11:16.044  ...STARTING...", want: false},
+		{line: "", want: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.line, func(t *testing.T) {
+			t.Parallel()
+			if got := isDNSSDRegistrationActiveLine(tt.line); got != tt.want {
+				t.Fatalf("isDNSSDRegistrationActiveLine(%q) = %v, want %v", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveListenHostIPs(t *testing.T) {
 	t.Parallel()
 

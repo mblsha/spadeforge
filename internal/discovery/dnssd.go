@@ -8,9 +8,28 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
+const (
+	dnssdAddressSettleDelay   = 150 * time.Millisecond
+	dnssdBrowseAttemptTimeout = 1 * time.Second
+	dnssdShutdownGracePeriod  = 200 * time.Millisecond
+)
+
+type dnssdLookupResult struct {
+	Host           string
+	Port           int
+	InterfaceIndex int
+}
+
+type dnssdAddressRecord struct {
+	InterfaceIndex int
+	IP             net.IP
+}
+
 var lookupBonjourHostIPs = net.LookupIP
+var lookupBonjourHostIPsForInterface = lookupBonjourHostIPsWithDNSSD
 
 func discoverWithDNSSD(ctx context.Context, service, domain string) (Endpoint, error) {
 	service = strings.TrimSpace(service)
@@ -27,7 +46,20 @@ func discoverWithDNSSD(ctx context.Context, service, domain string) (Endpoint, e
 		return Endpoint{}, fmt.Errorf("dns-sd is unavailable: %w", err)
 	}
 
-	cmdCtx, cancel := context.WithCancel(ctx)
+	for _, instance := range defaultDNSSDInstanceCandidates(service) {
+		endpoint, err := resolveDNSSDEndpointForInstance(ctx, instance, service, domainArg)
+		if err == nil {
+			return endpoint, nil
+		}
+		if ctx.Err() != nil {
+			return Endpoint{}, fmt.Errorf("discover %s failed: %w", service, ErrNoServiceFound)
+		}
+	}
+
+	browseCtx, stopBrowse := withDNSSDAttemptTimeout(ctx, dnssdBrowseAttemptTimeout)
+	defer stopBrowse()
+
+	cmdCtx, cancel := context.WithCancel(browseCtx)
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, "dns-sd", "-B", service, domainArg)
@@ -63,59 +95,94 @@ func discoverWithDNSSD(ctx context.Context, service, domain string) (Endpoint, e
 			continue
 		}
 		seenInstances[instance] = struct{}{}
-		cancel()
-		<-waitCh
+		stopDNSSDCommand(cancel, waitCh)
 		return endpoint, nil
 	}
 
 	if scanErr := scanner.Err(); scanErr != nil {
-		cancel()
-		<-waitCh
+		stopDNSSDCommand(cancel, waitCh)
 		return Endpoint{}, fmt.Errorf("scan dns-sd browse output: %w", scanErr)
 	}
 
-	cancel()
-	<-waitCh
+	stopDNSSDCommand(cancel, waitCh)
 	if ctx.Err() != nil {
 		return Endpoint{}, fmt.Errorf("discover %s failed: %w", service, ErrNoServiceFound)
 	}
 	return Endpoint{}, fmt.Errorf("discover %s failed: %w", service, ErrNoServiceFound)
 }
 
-func lookupInstanceWithDNSSD(ctx context.Context, instance, service, domain string) (string, int, error) {
-	value, err := runDNSSDForFirstValue(ctx, []string{"-L", instance, service, domain}, parseDNSSDLookupLine)
+func lookupInstanceWithDNSSD(ctx context.Context, instance, service, domain string) (dnssdLookupResult, error) {
+	cmdCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, "dns-sd", "-L", instance, service, domain)
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", 0, err
+		return dnssdLookupResult{}, fmt.Errorf("dns-sd stdout pipe: %w", err)
 	}
-	host, portStr, ok := strings.Cut(value, "\x00")
-	if !ok {
-		return "", 0, fmt.Errorf("invalid dns-sd lookup result")
+	cmd.Stderr = cmd.Stdout
+	if err := cmd.Start(); err != nil {
+		return dnssdLookupResult{}, fmt.Errorf("start dns-sd -L: %w", err)
 	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil || port <= 0 || port > 65535 {
-		return "", 0, fmt.Errorf("invalid dns-sd lookup port %q", portStr)
+
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- cmd.Wait()
+	}()
+
+	resultCh := make(chan dnssdLookupResult, 1)
+	scanErrCh := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			if result, ok := parseDNSSDLookupLine(scanner.Text()); ok {
+				resultCh <- result
+				return
+			}
+		}
+		scanErrCh <- scanner.Err()
+	}()
+
+	select {
+	case <-ctx.Done():
+		stopDNSSDCommand(cancel, waitCh)
+		return dnssdLookupResult{}, ctx.Err()
+	case result := <-resultCh:
+		stopDNSSDCommand(cancel, waitCh)
+		return result, nil
+	case scanErr := <-scanErrCh:
+		stopDNSSDCommand(cancel, waitCh)
+		if scanErr != nil {
+			return dnssdLookupResult{}, fmt.Errorf("scan dns-sd output: %w", scanErr)
+		}
+		return dnssdLookupResult{}, ErrNoServiceFound
+	case waitErr := <-waitCh:
+		if waitErr != nil && ctx.Err() == nil {
+			return dnssdLookupResult{}, fmt.Errorf("dns-sd exited: %w", waitErr)
+		}
+		return dnssdLookupResult{}, ErrNoServiceFound
 	}
-	return host, port, nil
 }
 
 func resolveDNSSDEndpointForInstance(ctx context.Context, instance, service, domain string) (Endpoint, error) {
-	host, port, err := lookupInstanceWithDNSSD(ctx, instance, service, domain)
+	result, err := lookupInstanceWithDNSSD(ctx, instance, service, domain)
 	if err != nil {
 		return Endpoint{}, err
 	}
-	normalizedHost, urlHost, err := resolveDNSSDEndpointHosts(host)
+	normalizedHost, urlHost, err := resolveDNSSDEndpointHosts(ctx, result.Host, result.InterfaceIndex)
 	if err != nil {
 		return Endpoint{}, err
 	}
 	return Endpoint{
-		URL:      fmt.Sprintf("http://%s:%d", urlHost, port),
+		URL:      fmt.Sprintf("http://%s:%d", urlHost, result.Port),
 		Instance: instance,
 		HostName: normalizedHost,
-		Port:     port,
+		Port:     result.Port,
 	}, nil
 }
 
-func resolveDNSSDEndpointHosts(host string) (string, string, error) {
+func resolveDNSSDEndpointHosts(ctx context.Context, host string, interfaceIndex int) (string, string, error) {
 	normalizedHost := normalizeBonjourHost(host)
 	if normalizedHost == "" {
 		return "", "", fmt.Errorf("dns-sd resolved no usable host")
@@ -123,6 +190,15 @@ func resolveDNSSDEndpointHosts(host string) (string, string, error) {
 
 	if ip := net.ParseIP(normalizedHost); ip != nil {
 		return normalizedHost, formatURLHost(ip), nil
+	}
+
+	if interfaceIndex > 0 {
+		ips, err := lookupBonjourHostIPsForInterface(ctx, normalizedHost, interfaceIndex)
+		if err == nil {
+			if ip := pickResolvedEndpointIP(ips); ip != nil {
+				return normalizedHost, formatURLHost(ip), nil
+			}
+		}
 	}
 
 	ips, err := lookupBonjourHostIPs(normalizedHost)
@@ -155,64 +231,137 @@ func pickResolvedEndpointIP(ips []net.IP) net.IP {
 	return pickIP(ipv4, ipv6)
 }
 
-func runDNSSDForFirstValue(
-	ctx context.Context,
-	args []string,
-	parseLine func(line string) (string, bool),
-) (string, error) {
+func lookupBonjourHostIPsWithDNSSD(ctx context.Context, host string, interfaceIndex int) ([]net.IP, error) {
+	if interfaceIndex <= 0 {
+		return nil, ErrNoServiceFound
+	}
+
 	cmdCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, "dns-sd", args...)
+	cmd := exec.CommandContext(cmdCtx, "dns-sd", "-G", "v4v6", host)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", fmt.Errorf("dns-sd stdout pipe: %w", err)
+		return nil, fmt.Errorf("dns-sd stdout pipe: %w", err)
 	}
 	cmd.Stderr = cmd.Stdout
 	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("start dns-sd %s: %w", strings.Join(args, " "), err)
+		return nil, fmt.Errorf("start dns-sd -G: %w", err)
 	}
-
-	resultCh := make(chan string, 1)
-	scanErrCh := make(chan error, 1)
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			if value, ok := parseLine(scanner.Text()); ok {
-				resultCh <- value
-				return
-			}
-		}
-		scanErrCh <- scanner.Err()
-	}()
 
 	waitCh := make(chan error, 1)
 	go func() {
 		waitCh <- cmd.Wait()
 	}()
 
+	recordCh := make(chan dnssdAddressRecord, 32)
+	scanErrCh := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			record, ok := parseDNSSDAddressLine(scanner.Text())
+			if !ok {
+				continue
+			}
+			select {
+			case <-cmdCtx.Done():
+				return
+			case recordCh <- record:
+			}
+		}
+		scanErrCh <- scanner.Err()
+	}()
+
+	var settleTimer *time.Timer
+	var settleCh <-chan time.Time
+	ips := make([]net.IP, 0, 4)
+	seen := make(map[string]struct{})
+	stopTimer := func() {
+		if settleTimer == nil {
+			return
+		}
+		if !settleTimer.Stop() {
+			select {
+			case <-settleTimer.C:
+			default:
+			}
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			stopDNSSDCommand(cancel, waitCh)
+			if len(ips) > 0 {
+				return ips, nil
+			}
+			return nil, ctx.Err()
+		case record := <-recordCh:
+			if record.InterfaceIndex != interfaceIndex {
+				continue
+			}
+			key := ipKey(record.IP)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			ips = append(ips, record.IP)
+
+			if settleTimer == nil {
+				settleTimer = time.NewTimer(dnssdAddressSettleDelay)
+				settleCh = settleTimer.C
+			} else {
+				stopTimer()
+				settleTimer.Reset(dnssdAddressSettleDelay)
+			}
+		case <-settleCh:
+			stopDNSSDCommand(cancel, waitCh)
+			return ips, nil
+		case scanErr := <-scanErrCh:
+			stopDNSSDCommand(cancel, waitCh)
+			if len(ips) > 0 {
+				return ips, nil
+			}
+			if scanErr != nil {
+				return nil, fmt.Errorf("scan dns-sd output: %w", scanErr)
+			}
+			return nil, ErrNoServiceFound
+		case waitErr := <-waitCh:
+			if len(ips) > 0 {
+				stopTimer()
+				return ips, nil
+			}
+			if waitErr != nil && ctx.Err() == nil {
+				return nil, fmt.Errorf("dns-sd exited: %w", waitErr)
+			}
+			return nil, ErrNoServiceFound
+		}
+	}
+}
+
+func withDNSSDAttemptTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= timeout {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func stopDNSSDCommand(cancel context.CancelFunc, waitCh <-chan error) {
+	if cancel != nil {
+		cancel()
+	}
+	if waitCh == nil {
+		return
+	}
+	timer := time.NewTimer(dnssdShutdownGracePeriod)
+	defer timer.Stop()
 	select {
-	case <-ctx.Done():
-		cancel()
-		<-waitCh
-		return "", ctx.Err()
-	case value := <-resultCh:
-		cancel()
-		<-waitCh
-		return value, nil
-	case scanErr := <-scanErrCh:
-		cancel()
-		<-waitCh
-		if scanErr != nil {
-			return "", fmt.Errorf("scan dns-sd output: %w", scanErr)
-		}
-		return "", ErrNoServiceFound
-	case waitErr := <-waitCh:
-		if waitErr != nil && ctx.Err() == nil {
-			return "", fmt.Errorf("dns-sd exited: %w", waitErr)
-		}
-		return "", ErrNoServiceFound
+	case <-waitCh:
+	case <-timer.C:
 	}
 }
 
@@ -236,51 +385,83 @@ func parseDNSSDBrowseLine(line, service, domain string) (string, bool) {
 	return instance, instance != ""
 }
 
-func parseDNSSDLookupLine(line string) (string, bool) {
+func defaultDNSSDInstanceCandidates(service string) []string {
+	switch strings.ToLower(trimTrailingDot(strings.TrimSpace(service))) {
+	case "_spadeloader._tcp":
+		return []string{"spadeloader"}
+	case trimTrailingDot(DefaultServiceName):
+		return []string{"spadeforge"}
+	default:
+		return nil
+	}
+}
+
+func parseDNSSDLookupLine(line string) (dnssdLookupResult, bool) {
 	marker := " can be reached at "
 	idx := strings.Index(line, marker)
 	if idx < 0 {
-		return "", false
+		return dnssdLookupResult{}, false
 	}
 	rest := strings.TrimSpace(line[idx+len(marker):])
+	interfaceIndex := 0
+	if ifaceStart := strings.Index(rest, "(interface "); ifaceStart >= 0 {
+		ifacePart := rest[ifaceStart+len("(interface "):]
+		if ifaceEnd := strings.IndexByte(ifacePart, ')'); ifaceEnd >= 0 {
+			if parsed, err := strconv.Atoi(strings.TrimSpace(ifacePart[:ifaceEnd])); err == nil && parsed > 0 {
+				interfaceIndex = parsed
+			}
+		}
+	}
 	if cut := strings.Index(rest, " ("); cut >= 0 {
 		rest = strings.TrimSpace(rest[:cut])
 	}
 	sep := strings.LastIndex(rest, ":")
 	if sep < 0 {
-		return "", false
+		return dnssdLookupResult{}, false
 	}
 	host := strings.TrimSpace(rest[:sep])
-	port := strings.TrimSpace(rest[sep+1:])
-	if host == "" || port == "" {
-		return "", false
+	portStr := strings.TrimSpace(rest[sep+1:])
+	if host == "" || portStr == "" {
+		return dnssdLookupResult{}, false
 	}
-	return host + "\x00" + port, true
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port <= 0 || port > 65535 {
+		return dnssdLookupResult{}, false
+	}
+	return dnssdLookupResult{
+		Host:           host,
+		Port:           port,
+		InterfaceIndex: interfaceIndex,
+	}, true
 }
 
-func parseDNSSDAddressLine(line string) (net.IP, bool) {
+func parseDNSSDAddressLine(line string) (dnssdAddressRecord, bool) {
 	fields := strings.Fields(line)
 	if len(fields) < 6 {
-		return nil, false
+		return dnssdAddressRecord{}, false
 	}
 	if !strings.EqualFold(fields[1], "Add") {
-		return nil, false
+		return dnssdAddressRecord{}, false
+	}
+	interfaceIndex, err := strconv.Atoi(strings.TrimSpace(fields[3]))
+	if err != nil || interfaceIndex <= 0 {
+		return dnssdAddressRecord{}, false
 	}
 	addr := strings.TrimSpace(fields[5])
 	if addr == "" {
-		return nil, false
+		return dnssdAddressRecord{}, false
 	}
 	if zoneIdx := strings.Index(addr, "%"); zoneIdx >= 0 {
 		addr = addr[:zoneIdx]
 	}
 	if strings.EqualFold(addr, "0.0.0.0") {
-		return nil, false
+		return dnssdAddressRecord{}, false
 	}
 	ip := net.ParseIP(addr)
 	if ip == nil || ip.IsUnspecified() {
-		return nil, false
+		return dnssdAddressRecord{}, false
 	}
-	return ip, true
+	return dnssdAddressRecord{InterfaceIndex: interfaceIndex, IP: ip}, true
 }
 
 func normalizeBonjourHost(host string) string {
