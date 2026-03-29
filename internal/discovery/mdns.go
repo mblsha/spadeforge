@@ -1,13 +1,20 @@
 package discovery
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"net"
+	"os/exec"
+	"runtime"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/libp2p/zeroconf/v2"
 )
+
+const dnssdRegisterActiveTimeout = 3 * time.Second
 
 type MDBrowser struct {
 	ifaces []net.Interface
@@ -64,6 +71,8 @@ func (b *MDBrowser) Browse(ctx context.Context, service, domain string, entries 
 
 type Advertiser struct {
 	server *zeroconf.Server
+	cancel context.CancelFunc
+	waitCh <-chan error
 }
 
 func StartAdvertiser(instance, service, domain string, port int, txt []string) (*Advertiser, error) {
@@ -84,6 +93,16 @@ func StartAdvertiserForListenHost(instance, service, domain string, port int, tx
 		return nil, fmt.Errorf("invalid advertise port: %d", port)
 	}
 
+	if runtime.GOOS == "darwin" {
+		advertiser, err := startDNSSDAdvertiser(instance, service, domain, port, txt)
+		if err == nil {
+			return advertiser, nil
+		}
+		if _, lookErr := exec.LookPath("dns-sd"); lookErr == nil {
+			return nil, err
+		}
+	}
+
 	ifaces, err := advertiseInterfacesForListenHost(listenHost)
 	if err != nil {
 		return nil, fmt.Errorf("select advertise interfaces: %w", err)
@@ -97,11 +116,101 @@ func StartAdvertiserForListenHost(instance, service, domain string, port int, tx
 }
 
 func (a *Advertiser) Close() error {
-	if a == nil || a.server == nil {
+	if a == nil {
 		return nil
 	}
-	a.server.Shutdown()
+	if a.server != nil {
+		a.server.Shutdown()
+	}
+	if a.cancel != nil {
+		stopDNSSDCommand(a.cancel, a.waitCh)
+	}
 	return nil
+}
+
+func startDNSSDAdvertiser(instance, service, domain string, port int, txt []string) (*Advertiser, error) {
+	if _, err := exec.LookPath("dns-sd"); err != nil {
+		return nil, fmt.Errorf("dns-sd is unavailable: %w", err)
+	}
+
+	domainArg := trimTrailingDot(strings.TrimSpace(domain))
+	if domainArg == "" {
+		domainArg = trimTrailingDot(DefaultDomain)
+	}
+
+	args := []string{
+		"-R",
+		strings.TrimSpace(instance),
+		strings.TrimSpace(service),
+		domainArg,
+		strconv.Itoa(port),
+	}
+	for _, record := range txt {
+		record = strings.TrimSpace(record)
+		if record == "" {
+			continue
+		}
+		args = append(args, record)
+	}
+
+	cmdCtx, cancel := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(cmdCtx, "dns-sd", args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("dns-sd stdout pipe: %w", err)
+	}
+	cmd.Stderr = cmd.Stdout
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("start dns-sd -R: %w", err)
+	}
+
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- cmd.Wait()
+	}()
+
+	activeCh := make(chan struct{}, 1)
+	scanErrCh := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		activeSeen := false
+		for scanner.Scan() {
+			if !activeSeen && isDNSSDRegistrationActiveLine(scanner.Text()) {
+				activeSeen = true
+				activeCh <- struct{}{}
+			}
+		}
+		scanErrCh <- scanner.Err()
+	}()
+
+	timer := time.NewTimer(dnssdRegisterActiveTimeout)
+	defer timer.Stop()
+
+	select {
+	case <-activeCh:
+		return &Advertiser{cancel: cancel, waitCh: waitCh}, nil
+	case scanErr := <-scanErrCh:
+		stopDNSSDCommand(cancel, waitCh)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan dns-sd -R output: %w", scanErr)
+		}
+		return nil, fmt.Errorf("dns-sd -R exited before registration became active")
+	case waitErr := <-waitCh:
+		if waitErr != nil {
+			return nil, fmt.Errorf("dns-sd -R exited: %w", waitErr)
+		}
+		return nil, fmt.Errorf("dns-sd -R exited before registration became active")
+	case <-timer.C:
+		stopDNSSDCommand(cancel, waitCh)
+		return nil, fmt.Errorf("dns-sd -R did not report an active registration within %s", dnssdRegisterActiveTimeout)
+	}
+}
+
+func isDNSSDRegistrationActiveLine(line string) bool {
+	return strings.Contains(strings.TrimSpace(line), "Name now registered and active")
 }
 
 func copyIPs(in []net.IP) []net.IP {

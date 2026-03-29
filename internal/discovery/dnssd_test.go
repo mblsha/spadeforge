@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"context"
 	"net"
 	"testing"
 )
@@ -18,6 +19,38 @@ func TestParseDNSSDBrowseLine(t *testing.T) {
 	}
 }
 
+func TestDefaultDNSSDInstanceCandidates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		service string
+		want    []string
+	}{
+		{service: "_spadeloader._tcp", want: []string{"spadeloader"}},
+		{service: "_spadeloader._tcp.", want: []string{"spadeloader"}},
+		{service: DefaultServiceName, want: []string{"spadeforge"}},
+		{service: "_custom._tcp", want: nil},
+		{service: "", want: nil},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.service, func(t *testing.T) {
+			t.Parallel()
+
+			got := defaultDNSSDInstanceCandidates(tt.service)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d (%v)", len(got), len(tt.want), got)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("candidate[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestParseDNSSDLookupLine(t *testing.T) {
 	t.Parallel()
 
@@ -26,8 +59,14 @@ func TestParseDNSSDLookupLine(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected parse success")
 	}
-	if value != "koubou.local.local.\x008080" {
-		t.Fatalf("value = %q", value)
+	if value.Host != "koubou.local.local." {
+		t.Fatalf("host = %q, want %q", value.Host, "koubou.local.local.")
+	}
+	if value.Port != 8080 {
+		t.Fatalf("port = %d, want %d", value.Port, 8080)
+	}
+	if value.InterfaceIndex != 24 {
+		t.Fatalf("interface = %d, want %d", value.InterfaceIndex, 24)
 	}
 }
 
@@ -70,15 +109,31 @@ func TestParseDNSSDAddressLine(t *testing.T) {
 			if !tt.ok {
 				return
 			}
-			if !got.Equal(tt.want) {
-				t.Fatalf("ip = %v, want %v", got, tt.want)
+			if got.InterfaceIndex <= 0 {
+				t.Fatalf("interface = %d, want > 0", got.InterfaceIndex)
+			}
+			if !got.IP.Equal(tt.want) {
+				t.Fatalf("ip = %v, want %v", got.IP, tt.want)
 			}
 		})
 	}
 }
 
-func TestResolveDNSSDEndpointHosts_PrefersIPv4LiteralURL(t *testing.T) {
+func TestResolveDNSSDEndpointHosts_PrefersInterfaceScopedIPs(t *testing.T) {
 	originalLookup := lookupBonjourHostIPs
+	originalInterfaceLookup := lookupBonjourHostIPsForInterface
+	lookupBonjourHostIPsForInterface = func(_ context.Context, host string, interfaceIndex int) ([]net.IP, error) {
+		if host != "koubou.local" {
+			t.Fatalf("lookup host = %q, want %q", host, "koubou.local")
+		}
+		if interfaceIndex != 25 {
+			t.Fatalf("interface index = %d, want %d", interfaceIndex, 25)
+		}
+		return []net.IP{
+			net.ParseIP("fe80::10"),
+			net.ParseIP("192.0.2.10"),
+		}, nil
+	}
 	lookupBonjourHostIPs = func(host string) ([]net.IP, error) {
 		if host != "koubou.local" {
 			t.Fatalf("lookup host = %q, want %q", host, "koubou.local")
@@ -92,10 +147,11 @@ func TestResolveDNSSDEndpointHosts_PrefersIPv4LiteralURL(t *testing.T) {
 		}, nil
 	}
 	t.Cleanup(func() {
+		lookupBonjourHostIPsForInterface = originalInterfaceLookup
 		lookupBonjourHostIPs = originalLookup
 	})
 
-	hostName, urlHost, err := resolveDNSSDEndpointHosts("koubou.local.local.")
+	hostName, urlHost, err := resolveDNSSDEndpointHosts(context.Background(), "koubou.local.local.", 25)
 	if err != nil {
 		t.Fatalf("resolveDNSSDEndpointHosts() error: %v", err)
 	}
@@ -107,8 +163,41 @@ func TestResolveDNSSDEndpointHosts_PrefersIPv4LiteralURL(t *testing.T) {
 	}
 }
 
+func TestResolveDNSSDEndpointHosts_FallsBackToGlobalLookup(t *testing.T) {
+	originalLookup := lookupBonjourHostIPs
+	originalInterfaceLookup := lookupBonjourHostIPsForInterface
+	lookupBonjourHostIPsForInterface = func(_ context.Context, _ string, _ int) ([]net.IP, error) {
+		return nil, ErrNoServiceFound
+	}
+	lookupBonjourHostIPs = func(host string) ([]net.IP, error) {
+		if host != "koubou.local" {
+			t.Fatalf("lookup host = %q, want %q", host, "koubou.local")
+		}
+		return []net.IP{
+			net.ParseIP("fe80::10"),
+			net.ParseIP("198.51.100.10"),
+			net.ParseIP("2001:db8::10"),
+		}, nil
+	}
+	t.Cleanup(func() {
+		lookupBonjourHostIPsForInterface = originalInterfaceLookup
+		lookupBonjourHostIPs = originalLookup
+	})
+
+	hostName, urlHost, err := resolveDNSSDEndpointHosts(context.Background(), "koubou.local.local.", 25)
+	if err != nil {
+		t.Fatalf("resolveDNSSDEndpointHosts() error: %v", err)
+	}
+	if hostName != "koubou.local" {
+		t.Fatalf("hostName = %q, want %q", hostName, "koubou.local")
+	}
+	if urlHost != "198.51.100.10" {
+		t.Fatalf("urlHost = %q, want %q", urlHost, "198.51.100.10")
+	}
+}
+
 func TestResolveDNSSDEndpointHosts_IPv6Literal(t *testing.T) {
-	hostName, urlHost, err := resolveDNSSDEndpointHosts("2001:db8::42")
+	hostName, urlHost, err := resolveDNSSDEndpointHosts(context.Background(), "2001:db8::42", 0)
 	if err != nil {
 		t.Fatalf("resolveDNSSDEndpointHosts() error: %v", err)
 	}

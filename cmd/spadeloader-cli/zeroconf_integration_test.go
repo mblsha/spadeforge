@@ -29,7 +29,7 @@ func TestRunFlash_DiscoversServerViaZeroconf(t *testing.T) {
 		}
 	}
 
-	listener, err := net.Listen("tcp", ":0")
+	listener, err := net.Listen("tcp4", "0.0.0.0:0")
 	if err != nil {
 		t.Fatalf("listen on ephemeral port: %v", err)
 	}

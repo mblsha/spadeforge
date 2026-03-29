@@ -25,10 +25,11 @@ type Record struct {
 
 	HeartbeatAt *time.Time `json:"heartbeat_at,omitempty"`
 
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	StartedAt  *time.Time `json:"started_at,omitempty"`
-	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	OriginalSubmittedAt time.Time  `json:"original_submitted_at,omitempty"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+	StartedAt           *time.Time `json:"started_at,omitempty"`
+	FinishedAt          *time.Time `json:"finished_at,omitempty"`
 
 	ExitCode *int `json:"exit_code,omitempty"`
 
@@ -40,26 +41,39 @@ type Record struct {
 }
 
 type NewRecordInput struct {
-	Board              string
-	DesignName         string
-	BitstreamName      string
-	BitstreamSHA256    string
-	BitstreamSizeBytes int64
+	Board               string
+	DesignName          string
+	BitstreamName       string
+	BitstreamSHA256     string
+	BitstreamSizeBytes  int64
+	OriginalSubmittedAt time.Time
 }
 
 func New(id string, input NewRecordInput, now time.Time) *Record {
 	n := now.UTC()
-	return &Record{
-		ID:                 id,
-		State:              StateQueued,
-		CreatedAt:          n,
-		UpdatedAt:          n,
-		Board:              input.Board,
-		DesignName:         input.DesignName,
-		BitstreamName:      input.BitstreamName,
-		BitstreamSHA256:    input.BitstreamSHA256,
-		BitstreamSizeBytes: input.BitstreamSizeBytes,
+	originalSubmittedAt := input.OriginalSubmittedAt.UTC()
+	if originalSubmittedAt.IsZero() {
+		originalSubmittedAt = n
 	}
+	return &Record{
+		ID:                  id,
+		State:               StateQueued,
+		CreatedAt:           n,
+		OriginalSubmittedAt: originalSubmittedAt,
+		UpdatedAt:           n,
+		Board:               input.Board,
+		DesignName:          input.DesignName,
+		BitstreamName:       input.BitstreamName,
+		BitstreamSHA256:     input.BitstreamSHA256,
+		BitstreamSizeBytes:  input.BitstreamSizeBytes,
+	}
+}
+
+func (r Record) EffectiveOriginalSubmittedAt() time.Time {
+	if !r.OriginalSubmittedAt.IsZero() {
+		return r.OriginalSubmittedAt.UTC()
+	}
+	return r.CreatedAt.UTC()
 }
 
 func (r *Record) Transition(next State, now time.Time, message string) error {

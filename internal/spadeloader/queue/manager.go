@@ -84,7 +84,11 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) Submit(_ context.Context, req SubmitRequest) (*job.Record, error) {
+func (m *Manager) Submit(ctx context.Context, req SubmitRequest) (*job.Record, error) {
+	return m.submitWithOriginal(ctx, req, time.Time{})
+}
+
+func (m *Manager) submitWithOriginal(_ context.Context, req SubmitRequest, originalSubmittedAt time.Time) (*job.Record, error) {
 	if req.Bitstream == nil {
 		return nil, fmt.Errorf("bitstream reader is required")
 	}
@@ -102,11 +106,12 @@ func (m *Manager) Submit(_ context.Context, req SubmitRequest) (*job.Record, err
 	}
 
 	rec := job.New(id, job.NewRecordInput{
-		Board:              req.Board,
-		DesignName:         req.DesignName,
-		BitstreamName:      req.BitstreamName,
-		BitstreamSHA256:    sha,
-		BitstreamSizeBytes: size,
+		Board:               req.Board,
+		DesignName:          req.DesignName,
+		BitstreamName:       req.BitstreamName,
+		BitstreamSHA256:     sha,
+		BitstreamSizeBytes:  size,
+		OriginalSubmittedAt: originalSubmittedAt,
 	}, time.Now())
 	if err := m.store.Save(rec); err != nil {
 		return nil, err
@@ -178,12 +183,12 @@ func (m *Manager) Reflash(ctx context.Context, sourceJobID string) (*job.Record,
 	}
 	defer file.Close()
 
-	return m.Submit(ctx, SubmitRequest{
+	return m.submitWithOriginal(ctx, SubmitRequest{
 		Board:         sourceRec.Board,
 		DesignName:    sourceRec.DesignName,
 		BitstreamName: sourceRec.BitstreamName,
 		Bitstream:     file,
-	})
+	}, sourceRec.EffectiveOriginalSubmittedAt())
 }
 
 func (m *Manager) recoverJobs() error {
