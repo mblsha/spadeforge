@@ -199,6 +199,7 @@ func startDNSSDAdvertiser(instance, service, domain string, port int, txt []stri
 		}
 		return nil, fmt.Errorf("dns-sd -R exited before registration became active")
 	case waitErr := <-waitCh:
+		cancel()
 		if waitErr != nil {
 			return nil, fmt.Errorf("dns-sd -R exited: %w", waitErr)
 		}
