@@ -109,6 +109,7 @@ func TestLocalServerURLForClient(t *testing.T) {
 		{name: "localhost", listen: "localhost:8083", wantURL: "http://127.0.0.1:8083"},
 		{name: "ipv4", listen: "192.168.1.10:8084", wantURL: "http://192.168.1.10:8084"},
 		{name: "ipv6", listen: "[fd00::10]:8085", wantURL: "http://[fd00::10]:8085"},
+		{name: "scoped ipv6", listen: "[fe80::1%en0]:8086", wantURL: "http://[fe80::1%25en0]:8086"},
 		{name: "invalid", listen: "8080", expectErr: true},
 	}
 

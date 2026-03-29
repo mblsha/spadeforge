@@ -222,6 +222,54 @@ func TestQueue_IsSequential(t *testing.T) {
 	}
 }
 
+func TestKillJob_CancelsQueuedJob(t *testing.T) {
+	cfg := testConfig(t)
+	st := store.New(cfg)
+	block := make(chan struct{})
+	fb := &builder.FakeBuilder{BlockCh: block}
+	mgr := New(cfg, st, fb)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	rec1, err := mgr.Submit(context.Background(), bytes.NewReader(validBundleBytes(t, "first")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec2, err := mgr.Submit(context.Background(), bytes.NewReader(validBundleBytes(t, "second")))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waitForState(t, mgr, rec1.ID, job.StateRunning)
+	waitForState(t, mgr, rec2.ID, job.StateQueued)
+
+	if err := mgr.KillJob(rec2.ID); err != nil {
+		t.Fatalf("KillJob() error: %v", err)
+	}
+
+	killed := waitForTerminalState(t, mgr, rec2.ID)
+	if killed.State != job.StateFailed {
+		t.Fatalf("expected queued job to fail after kill, got %s", killed.State)
+	}
+	if killed.Message != "build canceled before start" {
+		t.Fatalf("message = %q, want %q", killed.Message, "build canceled before start")
+	}
+	if killed.Error != context.Canceled.Error() {
+		t.Fatalf("error = %q, want %q", killed.Error, context.Canceled.Error())
+	}
+
+	close(block)
+	waitForTerminalState(t, mgr, rec1.ID)
+	time.Sleep(100 * time.Millisecond)
+	if len(fb.Calls) != 1 {
+		t.Fatalf("expected canceled queued job not to start, got %d builder calls", len(fb.Calls))
+	}
+}
+
 func TestWorker_ProgressStepAndHeartbeat(t *testing.T) {
 	cfg := testConfig(t)
 	st := store.New(cfg)
