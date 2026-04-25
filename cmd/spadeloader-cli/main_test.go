@@ -124,6 +124,42 @@ func TestRunFlash_MissingRequiredArgsFails(t *testing.T) {
 	}
 }
 
+func TestParseProgramTarget(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		raw     string
+		want    job.ProgramTarget
+		wantErr bool
+	}{
+		{name: "default", raw: "", want: job.ProgramTargetRAM},
+		{name: "ram", raw: "ram", want: job.ProgramTargetRAM},
+		{name: "flash", raw: "flash", want: job.ProgramTargetFlash},
+		{name: "invalid", raw: "eeprom", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := parseProgramTarget(tt.raw)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parseProgramTarget() expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseProgramTarget() error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("parseProgramTarget() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWaitForTerminalViaEvents_StreamEndsEarlyFallsBackToPolling(t *testing.T) {
 	t.Parallel()
 

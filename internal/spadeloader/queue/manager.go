@@ -25,6 +25,7 @@ type SubmitRequest struct {
 	DesignName    string
 	BitstreamName string
 	Bitstream     io.Reader
+	ProgramTarget job.ProgramTarget
 }
 
 var (
@@ -111,6 +112,7 @@ func (m *Manager) submitWithOriginal(_ context.Context, req SubmitRequest, origi
 		BitstreamName:       req.BitstreamName,
 		BitstreamSHA256:     sha,
 		BitstreamSizeBytes:  size,
+		ProgramTarget:       req.ProgramTarget,
 		OriginalSubmittedAt: originalSubmittedAt,
 	}, time.Now())
 	if err := m.store.Save(rec); err != nil {
@@ -135,6 +137,7 @@ func (m *Manager) Get(jobID string) (*job.Record, bool) {
 		return nil, false
 	}
 	copyRec := *rec
+	normalizeRecordTarget(&copyRec)
 	return &copyRec, true
 }
 
@@ -144,7 +147,9 @@ func (m *Manager) ListJobs(limit int) []job.Record {
 
 	out := make([]job.Record, 0, len(m.jobs))
 	for _, rec := range m.jobs {
-		out = append(out, *rec)
+		copyRec := *rec
+		normalizeRecordTarget(&copyRec)
+		out = append(out, copyRec)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
@@ -167,7 +172,7 @@ func (m *Manager) ListRecentDesigns(limit int) ([]history.Item, error) {
 	return m.history.List(limit)
 }
 
-func (m *Manager) Reflash(ctx context.Context, sourceJobID string) (*job.Record, error) {
+func (m *Manager) Reflash(ctx context.Context, sourceJobID string, target job.ProgramTarget) (*job.Record, error) {
 	sourceRec, ok := m.Get(sourceJobID)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrJobNotFound, sourceJobID)
@@ -188,6 +193,7 @@ func (m *Manager) Reflash(ctx context.Context, sourceJobID string) (*job.Record,
 		DesignName:    sourceRec.DesignName,
 		BitstreamName: sourceRec.BitstreamName,
 		Bitstream:     file,
+		ProgramTarget: target,
 	}, sourceRec.EffectiveOriginalSubmittedAt())
 }
 
@@ -250,6 +256,8 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 	rec.CurrentStep = "flash"
 	board := rec.Board
 	designName := rec.DesignName
+	programTarget := job.NormalizeProgramTarget(rec.ProgramTarget)
+	rec.ProgramTarget = programTarget
 	_ = m.store.Save(rec)
 	m.emitEventLocked(rec, "running")
 	m.mu.Unlock()
@@ -261,6 +269,7 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 		Board:         board,
 		BitstreamPath: m.store.RequestBitstreamPath(id),
 		ArtifactsDir:  m.store.ArtifactsJobDir(id),
+		ProgramTarget: programTarget,
 		Progress:      m.progressUpdater(id),
 	})
 	cancel()
@@ -326,6 +335,10 @@ func (m *Manager) process(parentCtx context.Context, id string) {
 	if err := m.removeJobsFromDisk(pruneIDs); err != nil {
 		log.Printf("[spadeloader job %s] failed to prune retained jobs: %v", jobID, err)
 	}
+}
+
+func normalizeRecordTarget(rec *job.Record) {
+	rec.ProgramTarget = job.NormalizeProgramTarget(rec.ProgramTarget)
 }
 
 func (m *Manager) progressUpdater(jobID string) flasher.ProgressFunc {

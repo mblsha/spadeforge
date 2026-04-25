@@ -13,11 +13,18 @@ Its core function is to run:
 openFPGALoader -b <board_name> <bitstream_path>
 ```
 
+or, for non-volatile flash programming:
+
+```bash
+openFPGALoader -b <board_name> -f <bitstream_path>
+```
+
 on the server after receiving:
 
 1. FPGA board name
 2. Human-readable design name
 3. Bitstream file (`.bit`)
+4. Program target (`ram` by default, or `flash`)
 
 The system keeps a persistent history of the last 100 submitted designs in the data folder and supports zeroconf/mDNS discovery in the same style as Spadeforge.
 
@@ -34,7 +41,7 @@ The system keeps a persistent history of the last 100 submitted designs in the d
 1. Bitstream build/synthesis/place-and-route (Spadeloader only flashes provided bitstreams).
 2. Multi-board orchestration/scheduling across multiple physical devices.
 3. GUI/web dashboard.
-4. Advanced programmer features outside `openFPGALoader -b <board> <bitstream>`.
+4. Advanced programmer features outside RAM programming and openFPGALoader `-f` flash programming.
 
 ## 4. Users and Core User Stories
 
@@ -52,6 +59,7 @@ Server accepts a flash job containing:
 1. `board` (required, string)
 2. `design_name` (required, string)
 3. `bitstream` (required, file upload)
+4. `target` (optional, `ram` or `flash`; defaults to `ram`)
 
 Validation:
 
@@ -59,6 +67,7 @@ Validation:
 2. `design_name` length 1..128 (trimmed)
 3. `bitstream` extension must be `.bit`
 4. `bitstream` size must be <= configured max upload bytes
+5. `target` must be `ram` or `flash` when provided
 
 ### FR-2: Flash execution
 
@@ -67,6 +76,12 @@ Execution command must be created with `exec.CommandContext` (no shell interpola
 
 ```bash
 openFPGALoader -b <board> <absolute_bitstream_path>
+```
+
+For `target=flash`, add openFPGALoader's write-flash flag:
+
+```bash
+openFPGALoader -b <board> -f <absolute_bitstream_path>
 ```
 
 Terminal state is `SUCCEEDED` or `FAILED`, with captured exit code and log.
@@ -137,13 +152,15 @@ Fields:
 1. `board` (text)
 2. `design_name` (text)
 3. `bitstream` (file)
+4. `target` (text, optional: `ram` or `flash`, default `ram`)
 
 Success response (`202 Accepted`):
 
 ```json
 {
   "job_id": "d5af1c1b6d824f5f9df91c8f4ad2d57e",
-  "state": "QUEUED"
+  "state": "QUEUED",
+  "target": "ram"
 }
 ```
 
@@ -210,6 +227,7 @@ Command:
 
 ```bash
 spadeloader-cli flash --board alchitry_au --name "Blink Demo v5" --bitstream design.bit
+spadeloader-cli flash --board alchitry_au --name "Blink Demo v5" --bitstream design.bit --target flash
 ```
 
 Alias:
@@ -228,10 +246,11 @@ Flags:
 6. `--board` (required if non-interactive)
 7. `--name` (required if non-interactive)
 8. `--bitstream` (required if non-interactive)
-9. `--token` and `--auth-header`
-10. `--wait` (default `true`)
-11. `--poll` (default `2s`)
-12. `--show-log-on-fail` (default `true`)
+9. `--target` (`ram` or `flash`, default `ram`)
+10. `--token` and `--auth-header`
+11. `--wait` (default `true`)
+12. `--poll` (default `2s`)
+13. `--show-log-on-fail` (default `true`)
 
 Prompt behavior:
 

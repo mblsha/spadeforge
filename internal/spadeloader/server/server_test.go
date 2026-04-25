@@ -295,6 +295,9 @@ func TestListJobsAndReflash(t *testing.T) {
 	if listPayload2.Items[0].ID != reflashedJobID {
 		t.Fatalf("items[0].ID = %q, want %q", listPayload2.Items[0].ID, reflashedJobID)
 	}
+	if listPayload2.Items[0].ProgramTarget != job.ProgramTargetRAM {
+		t.Fatalf("items[0].ProgramTarget = %q, want %q", listPayload2.Items[0].ProgramTarget, job.ProgramTargetRAM)
+	}
 	if !listPayload2.Items[0].EffectiveOriginalSubmittedAt().Equal(listPayload2.Items[1].CreatedAt) {
 		t.Fatalf(
 			"items[0].original_submitted_at = %s, want %s",
@@ -307,7 +310,91 @@ func TestListJobsAndReflash(t *testing.T) {
 	}
 }
 
+func TestSubmitAndReflashFlashTarget(t *testing.T) {
+	t.Parallel()
+
+	cfg := loaderconfig.Default()
+	cfg.BaseDir = t.TempDir()
+	cfg.WorkerTimeout = 2 * time.Second
+
+	st := store.New(cfg)
+	hs := history.New(cfg.HistoryPath(), cfg.HistoryLimit)
+	mgr := queue.New(cfg, st, &flasher.FakeFlasher{}, hs)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+
+	api := New(cfg, mgr)
+	ts := httptest.NewServer(api.Handler())
+	defer ts.Close()
+
+	status, body := submitJobWithTarget(t, ts.URL, "alchitry_au", "Blink", "design.bit", []byte("bitstream"), "flash")
+	if status != http.StatusAccepted {
+		t.Fatalf("submit status = %d, body=%s", status, body)
+	}
+	var submitResp map[string]string
+	if err := json.Unmarshal([]byte(body), &submitResp); err != nil {
+		t.Fatalf("decode submit response: %v", err)
+	}
+	sourceJobID := strings.TrimSpace(submitResp["job_id"])
+	final := waitForTerminalHTTP(t, ts.URL, sourceJobID, "", "")
+	if final.ProgramTarget != job.ProgramTargetFlash {
+		t.Fatalf("submitted target = %q, want %q", final.ProgramTarget, job.ProgramTargetFlash)
+	}
+
+	reflashResp, err := http.Post(ts.URL+"/v1/jobs/"+sourceJobID+"/reflash?target=flash", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST reflash error: %v", err)
+	}
+	defer reflashResp.Body.Close()
+	if reflashResp.StatusCode != http.StatusAccepted {
+		raw, _ := io.ReadAll(reflashResp.Body)
+		t.Fatalf("reflash status = %d body=%s", reflashResp.StatusCode, string(raw))
+	}
+	var reflashPayload map[string]string
+	if err := json.NewDecoder(reflashResp.Body).Decode(&reflashPayload); err != nil {
+		t.Fatalf("decode reflash payload: %v", err)
+	}
+	reflashedJobID := strings.TrimSpace(reflashPayload["job_id"])
+	final = waitForTerminalHTTP(t, ts.URL, reflashedJobID, "", "")
+	if final.ProgramTarget != job.ProgramTargetFlash {
+		t.Fatalf("reflashed target = %q, want %q", final.ProgramTarget, job.ProgramTargetFlash)
+	}
+}
+
+func TestSubmitInvalidTarget(t *testing.T) {
+	t.Parallel()
+
+	cfg := loaderconfig.Default()
+	cfg.BaseDir = t.TempDir()
+
+	st := store.New(cfg)
+	hs := history.New(cfg.HistoryPath(), cfg.HistoryLimit)
+	mgr := queue.New(cfg, st, &flasher.FakeFlasher{}, hs)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+
+	api := New(cfg, mgr)
+	ts := httptest.NewServer(api.Handler())
+	defer ts.Close()
+
+	status, _ := submitJobWithTarget(t, ts.URL, "alchitry_au", "Blink", "design.bit", []byte("bitstream"), "eeprom")
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+}
+
 func submitJob(t *testing.T, baseURL, board, designName, filename string, bitstream []byte, authHeader, token string) (int, string) {
+	t.Helper()
+	return submitJobWithTarget(t, baseURL, board, designName, filename, bitstream, "")
+}
+
+func submitJobWithTarget(t *testing.T, baseURL, board, designName, filename string, bitstream []byte, target string) (int, string) {
 	t.Helper()
 
 	var body bytes.Buffer
@@ -317,6 +404,11 @@ func submitJob(t *testing.T, baseURL, board, designName, filename string, bitstr
 	}
 	if err := mw.WriteField("design_name", designName); err != nil {
 		t.Fatalf("WriteField(design_name) error: %v", err)
+	}
+	if strings.TrimSpace(target) != "" {
+		if err := mw.WriteField("target", target); err != nil {
+			t.Fatalf("WriteField(target) error: %v", err)
+		}
 	}
 	fw, err := mw.CreateFormFile("bitstream", filepath.Base(filename))
 	if err != nil {
