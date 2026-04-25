@@ -56,6 +56,7 @@ type jobsLoadedMsg struct {
 
 type reflashResultMsg struct {
 	newJobID string
+	target   job.ProgramTarget
 	err      error
 }
 
@@ -153,8 +154,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.lastErr = ""
 		m.pendingID = typed.newJobID
-		m.status = fmt.Sprintf("reflash submitted: %s", typed.newJobID)
-		m.addEvent("reflash submitted: " + shortID(typed.newJobID))
+		m.status = fmt.Sprintf("%s reflash submitted: %s", typed.target, typed.newJobID)
+		m.addEvent(fmt.Sprintf("%s reflash submitted: %s", typed.target, shortID(typed.newJobID)))
 		m.loading = true
 		return m, m.fetchJobsCmd()
 	case tea.KeyMsg:
@@ -171,21 +172,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading = true
 			return m, m.fetchJobsCmd()
 		case "enter":
-			if m.reflashing {
-				return m, nil
-			}
-			selected, ok := m.selected()
-			if !ok {
-				return m, nil
-			}
-			m.reflashing = true
-			m.status = fmt.Sprintf("reflashing %s | %s ...", selected.Board, selected.DesignName)
-			m.lastErr = ""
-			m.addEvent(fmt.Sprintf("reflash requested for %s | %s", selected.Board, selected.DesignName))
-			return m, m.reflashCmd(selected.ID)
+			return m.startReflash(job.ProgramTargetRAM)
+		case "f":
+			return m.startReflash(job.ProgramTargetFlash)
 		}
 	}
 	return m, nil
+}
+
+func (m model) startReflash(target job.ProgramTarget) (tea.Model, tea.Cmd) {
+	if m.reflashing {
+		return m, nil
+	}
+	selected, ok := m.selected()
+	if !ok {
+		return m, nil
+	}
+	m.reflashing = true
+	target = job.NormalizeProgramTarget(target)
+	m.status = fmt.Sprintf("reflashing %s to %s | %s ...", target, selected.Board, selected.DesignName)
+	m.lastErr = ""
+	m.addEvent(fmt.Sprintf("%s reflash requested for %s | %s", target, selected.Board, selected.DesignName))
+	return m, m.reflashCmd(selected.ID, target)
 }
 
 func (m model) View() string {
@@ -196,7 +204,7 @@ func (m model) View() string {
 		b.WriteString(trimToWidth("Zeroconf primary: "+m.advertisePrimaryAddr, m.width))
 		b.WriteByte('\n')
 	}
-	b.WriteString(trimToWidth("Keys: j/k or arrows move  enter reflash  r refresh  q quit", m.width))
+	b.WriteString(trimToWidth("Keys: j/k or arrows move  enter reflash RAM  f reflash flash  r refresh  q quit", m.width))
 	b.WriteByte('\n')
 	b.WriteString(m.statusLine())
 	b.WriteString("\n")
@@ -219,11 +227,12 @@ func (m model) View() string {
 		}
 		created := displayTimestamp(rec)
 		line := fmt.Sprintf(
-			"%s%s  %-12s  %-24s  %-10s  %s",
+			"%s%s  %-12s  %-24s  %-5s  %-10s  %s",
 			prefix,
 			created,
 			rec.Board,
 			rec.DesignName,
+			job.NormalizeProgramTarget(rec.ProgramTarget),
 			rec.State,
 			shortID(rec.ID),
 		)
@@ -437,12 +446,13 @@ func (m model) tickCmd() tea.Cmd {
 	})
 }
 
-func (m model) reflashCmd(sourceJobID string) tea.Cmd {
+func (m model) reflashCmd(sourceJobID string, target job.ProgramTarget) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), m.reflashTimeout)
 		defer cancel()
-		newID, err := m.client.ReflashJob(ctx, sourceJobID)
-		return reflashResultMsg{newJobID: newID, err: err}
+		target = job.NormalizeProgramTarget(target)
+		newID, err := m.client.ReflashJob(ctx, sourceJobID, target)
+		return reflashResultMsg{newJobID: newID, target: target, err: err}
 	}
 }
 
@@ -458,12 +468,13 @@ func bitstreamKey(rec job.Record) string {
 	design := strings.TrimSpace(rec.DesignName)
 	sha := strings.TrimSpace(rec.BitstreamSHA256)
 	name := strings.TrimSpace(rec.BitstreamName)
+	target := string(job.NormalizeProgramTarget(rec.ProgramTarget))
 	if board == "" && design == "" && sha == "" && name == "" {
 		return strings.TrimSpace(rec.ID)
 	}
 
 	var b strings.Builder
-	b.Grow(len(rec.Board) + len(rec.DesignName) + len(rec.BitstreamSHA256) + len(rec.BitstreamName) + 4)
+	b.Grow(len(rec.Board) + len(rec.DesignName) + len(rec.BitstreamSHA256) + len(rec.BitstreamName) + len(target) + 5)
 	b.WriteString(board)
 	b.WriteByte('|')
 	b.WriteString(design)
@@ -471,6 +482,8 @@ func bitstreamKey(rec job.Record) string {
 	b.WriteString(sha)
 	b.WriteByte('|')
 	b.WriteString(name)
+	b.WriteByte('|')
+	b.WriteString(target)
 	return b.String()
 }
 

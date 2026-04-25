@@ -91,6 +91,11 @@ func (a *API) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 
 	board := strings.TrimSpace(r.FormValue("board"))
 	designName := strings.TrimSpace(r.FormValue("design_name"))
+	programTarget, err := parseProgramTarget(r.FormValue("target"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	if err := validateBoard(board); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -123,6 +128,7 @@ func (a *API) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		DesignName:    designName,
 		BitstreamName: filepath.Base(bitstreamName),
 		Bitstream:     file,
+		ProgramTarget: programTarget,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -132,6 +138,7 @@ func (a *API) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"job_id": rec.ID,
 		"state":  string(rec.State),
+		"target": string(rec.ProgramTarget),
 	})
 }
 
@@ -172,8 +179,13 @@ func (a *API) handleReflashJob(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "board is not allowed by server policy"})
 		return
 	}
+	programTarget, err := parseProgramTarget(r.URL.Query().Get("target"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
-	rec, err := a.manager.Reflash(r.Context(), sourceJobID)
+	rec, err := a.manager.Reflash(r.Context(), sourceJobID, programTarget)
 	if err != nil {
 		switch {
 		case errors.Is(err, queue.ErrJobNotFound), errors.Is(err, queue.ErrBitstreamUnavailable):
@@ -188,6 +200,7 @@ func (a *API) handleReflashJob(w http.ResponseWriter, r *http.Request) {
 		"job_id":        rec.ID,
 		"source_job_id": sourceJobID,
 		"state":         string(rec.State),
+		"target":        string(rec.ProgramTarget),
 	})
 }
 
@@ -373,6 +386,17 @@ func validateBitstreamName(name string) error {
 		return errors.New("bitstream file must have .bit extension")
 	}
 	return nil
+}
+
+func parseProgramTarget(raw string) (job.ProgramTarget, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", string(job.ProgramTargetRAM):
+		return job.ProgramTargetRAM, nil
+	case string(job.ProgramTargetFlash):
+		return job.ProgramTargetFlash, nil
+	default:
+		return "", errors.New("target must be ram or flash")
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

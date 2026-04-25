@@ -15,6 +15,13 @@ const (
 	StateFailed    State = "FAILED"
 )
 
+type ProgramTarget string
+
+const (
+	ProgramTargetRAM   ProgramTarget = "ram"
+	ProgramTargetFlash ProgramTarget = "flash"
+)
+
 type Record struct {
 	ID string `json:"id"`
 
@@ -33,11 +40,12 @@ type Record struct {
 
 	ExitCode *int `json:"exit_code,omitempty"`
 
-	Board              string `json:"board"`
-	DesignName         string `json:"design_name"`
-	BitstreamName      string `json:"bitstream_name"`
-	BitstreamSHA256    string `json:"bitstream_sha256"`
-	BitstreamSizeBytes int64  `json:"bitstream_size_bytes"`
+	Board              string        `json:"board"`
+	DesignName         string        `json:"design_name"`
+	BitstreamName      string        `json:"bitstream_name"`
+	BitstreamSHA256    string        `json:"bitstream_sha256"`
+	BitstreamSizeBytes int64         `json:"bitstream_size_bytes"`
+	ProgramTarget      ProgramTarget `json:"program_target"`
 }
 
 type NewRecordInput struct {
@@ -46,6 +54,7 @@ type NewRecordInput struct {
 	BitstreamName       string
 	BitstreamSHA256     string
 	BitstreamSizeBytes  int64
+	ProgramTarget       ProgramTarget
 	OriginalSubmittedAt time.Time
 }
 
@@ -66,6 +75,16 @@ func New(id string, input NewRecordInput, now time.Time) *Record {
 		BitstreamName:       input.BitstreamName,
 		BitstreamSHA256:     input.BitstreamSHA256,
 		BitstreamSizeBytes:  input.BitstreamSizeBytes,
+		ProgramTarget:       NormalizeProgramTarget(input.ProgramTarget),
+	}
+}
+
+func NormalizeProgramTarget(target ProgramTarget) ProgramTarget {
+	switch target {
+	case ProgramTargetFlash:
+		return ProgramTargetFlash
+	default:
+		return ProgramTargetRAM
 	}
 }
 

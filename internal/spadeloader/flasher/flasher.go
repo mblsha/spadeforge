@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/mblsha/spadeforge/internal/spadeloader/job"
 )
 
 const defaultBin = "openFPGALoader"
@@ -27,6 +29,7 @@ type FlashJob struct {
 	Board         string
 	BitstreamPath string
 	ArtifactsDir  string
+	ProgramTarget job.ProgramTarget
 	Progress      ProgressFunc
 }
 
@@ -65,9 +68,10 @@ func (f *OpenFPGALoaderFlasher) Flash(ctx context.Context, job FlashJob) (Result
 		job.Progress(ProgressUpdate{Step: "flash", Message: "running openFPGALoader", HeartbeatAt: time.Now().UTC()})
 	}
 
-	_, _ = fmt.Fprintf(logFile, "running: %s -b %s %s\n", f.Bin, job.Board, job.BitstreamPath)
+	args := openFPGALoaderArgs(job.Board, job.BitstreamPath, job.ProgramTarget)
+	_, _ = fmt.Fprintf(logFile, "running: %s %s\n", f.Bin, strings.Join(args, " "))
 
-	cmd := exec.CommandContext(ctx, f.Bin, "-b", job.Board, job.BitstreamPath)
+	cmd := exec.CommandContext(ctx, f.Bin, args...)
 	cmd.Stdout = io.MultiWriter(logFile)
 	cmd.Stderr = io.MultiWriter(logFile)
 
@@ -112,7 +116,7 @@ func (f *FakeFlasher) Flash(ctx context.Context, job FlashJob) (Result, error) {
 		job.Progress(ProgressUpdate{Step: "flash", Message: "running fake flasher", HeartbeatAt: time.Now().UTC()})
 	}
 
-	_, _ = fmt.Fprintf(logFile, "fake flashing board=%s bitstream=%s\n", job.Board, job.BitstreamPath)
+	_, _ = fmt.Fprintf(logFile, "fake flashing board=%s target=%s bitstream=%s\n", job.Board, normalizeProgramTarget(job.ProgramTarget), job.BitstreamPath)
 
 	if f.Delay > 0 {
 		timer := time.NewTimer(f.Delay)
@@ -143,4 +147,16 @@ func (f *FakeFlasher) Flash(ctx context.Context, job FlashJob) (Result, error) {
 	}
 	_, _ = fmt.Fprintln(logFile, message)
 	return Result{Message: message, ExitCode: 0}, nil
+}
+
+func openFPGALoaderArgs(board, bitstreamPath string, target job.ProgramTarget) []string {
+	args := []string{"-b", board}
+	if normalizeProgramTarget(target) == job.ProgramTargetFlash {
+		args = append(args, "-f")
+	}
+	return append(args, bitstreamPath)
+}
+
+func normalizeProgramTarget(target job.ProgramTarget) job.ProgramTarget {
+	return job.NormalizeProgramTarget(target)
 }

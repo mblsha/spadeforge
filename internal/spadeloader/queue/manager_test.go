@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,27 @@ import (
 	"github.com/mblsha/spadeforge/internal/spadeloader/job"
 	"github.com/mblsha/spadeforge/internal/spadeloader/store"
 )
+
+type recordingFlasher struct {
+	mu   sync.Mutex
+	jobs []flasher.FlashJob
+}
+
+func (f *recordingFlasher) Flash(_ context.Context, flashJob flasher.FlashJob) (flasher.Result, error) {
+	f.mu.Lock()
+	f.jobs = append(f.jobs, flashJob)
+	f.mu.Unlock()
+	return flasher.Result{Message: "flash succeeded", ExitCode: 0}, nil
+}
+
+func (f *recordingFlasher) lastTarget() job.ProgramTarget {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.jobs) == 0 {
+		return ""
+	}
+	return f.jobs[len(f.jobs)-1].ProgramTarget
+}
 
 func TestManagerSubmitAndProcessSuccess(t *testing.T) {
 	t.Parallel()
@@ -76,6 +98,81 @@ func TestManagerSubmitAndProcessSuccess(t *testing.T) {
 	}
 	if len(logRaw) == 0 {
 		t.Fatalf("expected non-empty console log")
+	}
+}
+
+func TestManagerSubmitDefaultsToRAMTarget(t *testing.T) {
+	t.Parallel()
+
+	cfg := loaderconfig.Default()
+	cfg.BaseDir = t.TempDir()
+	cfg.WorkerTimeout = 2 * time.Second
+
+	st := store.New(cfg)
+	hs := history.New(cfg.HistoryPath(), cfg.HistoryLimit)
+	recorder := &recordingFlasher{}
+	mgr := New(cfg, st, recorder, hs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+
+	rec, err := mgr.Submit(context.Background(), SubmitRequest{
+		Board:         "alchitry_au",
+		DesignName:    "Blink",
+		BitstreamName: "design.bit",
+		Bitstream:     bytes.NewBufferString("bitstream"),
+	})
+	if err != nil {
+		t.Fatalf("Submit() error: %v", err)
+	}
+	if rec.ProgramTarget != job.ProgramTargetRAM {
+		t.Fatalf("ProgramTarget = %q, want %q", rec.ProgramTarget, job.ProgramTargetRAM)
+	}
+
+	waitForTerminal(t, mgr, rec.ID, 3*time.Second)
+	if got := recorder.lastTarget(); got != job.ProgramTargetRAM {
+		t.Fatalf("flasher target = %q, want %q", got, job.ProgramTargetRAM)
+	}
+}
+
+func TestManagerSubmitFlashTarget(t *testing.T) {
+	t.Parallel()
+
+	cfg := loaderconfig.Default()
+	cfg.BaseDir = t.TempDir()
+	cfg.WorkerTimeout = 2 * time.Second
+
+	st := store.New(cfg)
+	hs := history.New(cfg.HistoryPath(), cfg.HistoryLimit)
+	recorder := &recordingFlasher{}
+	mgr := New(cfg, st, recorder, hs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+
+	rec, err := mgr.Submit(context.Background(), SubmitRequest{
+		Board:         "alchitry_au",
+		DesignName:    "Blink",
+		BitstreamName: "design.bit",
+		Bitstream:     bytes.NewBufferString("bitstream"),
+		ProgramTarget: job.ProgramTargetFlash,
+	})
+	if err != nil {
+		t.Fatalf("Submit() error: %v", err)
+	}
+	if rec.ProgramTarget != job.ProgramTargetFlash {
+		t.Fatalf("ProgramTarget = %q, want %q", rec.ProgramTarget, job.ProgramTargetFlash)
+	}
+
+	waitForTerminal(t, mgr, rec.ID, 3*time.Second)
+	if got := recorder.lastTarget(); got != job.ProgramTargetFlash {
+		t.Fatalf("flasher target = %q, want %q", got, job.ProgramTargetFlash)
 	}
 }
 
@@ -269,7 +366,7 @@ func TestManagerReflash(t *testing.T) {
 	}
 	waitForTerminal(t, mgr, original.ID, 3*time.Second)
 
-	reflashed, err := mgr.Reflash(context.Background(), original.ID)
+	reflashed, err := mgr.Reflash(context.Background(), original.ID, job.ProgramTargetRAM)
 	if err != nil {
 		t.Fatalf("Reflash() error: %v", err)
 	}
@@ -278,6 +375,9 @@ func TestManagerReflash(t *testing.T) {
 	}
 	if reflashed.Board != original.Board || reflashed.DesignName != original.DesignName {
 		t.Fatalf("unexpected reflash metadata: board=%q design=%q", reflashed.Board, reflashed.DesignName)
+	}
+	if reflashed.ProgramTarget != job.ProgramTargetRAM {
+		t.Fatalf("reflashed target = %q, want %q", reflashed.ProgramTarget, job.ProgramTargetRAM)
 	}
 	if !reflashed.EffectiveOriginalSubmittedAt().Equal(original.CreatedAt) {
 		t.Fatalf("reflashed original submitted at = %s, want %s", reflashed.EffectiveOriginalSubmittedAt(), original.CreatedAt)
@@ -290,6 +390,48 @@ func TestManagerReflash(t *testing.T) {
 	}
 	if items[0].ID != reflashed.ID {
 		t.Fatalf("items[0].ID = %q, want %q", items[0].ID, reflashed.ID)
+	}
+}
+
+func TestManagerReflashFlashTarget(t *testing.T) {
+	t.Parallel()
+
+	cfg := loaderconfig.Default()
+	cfg.BaseDir = t.TempDir()
+	cfg.WorkerTimeout = 2 * time.Second
+
+	st := store.New(cfg)
+	hs := history.New(cfg.HistoryPath(), cfg.HistoryLimit)
+	recorder := &recordingFlasher{}
+	mgr := New(cfg, st, recorder, hs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+
+	original, err := mgr.Submit(context.Background(), SubmitRequest{
+		Board:         "alchitry_au",
+		DesignName:    "Blink",
+		BitstreamName: "design.bit",
+		Bitstream:     bytes.NewBufferString("bitstream"),
+	})
+	if err != nil {
+		t.Fatalf("Submit() error: %v", err)
+	}
+	waitForTerminal(t, mgr, original.ID, 3*time.Second)
+
+	reflashed, err := mgr.Reflash(context.Background(), original.ID, job.ProgramTargetFlash)
+	if err != nil {
+		t.Fatalf("Reflash() error: %v", err)
+	}
+	if reflashed.ProgramTarget != job.ProgramTargetFlash {
+		t.Fatalf("reflashed target = %q, want %q", reflashed.ProgramTarget, job.ProgramTargetFlash)
+	}
+	waitForTerminal(t, mgr, reflashed.ID, 3*time.Second)
+	if got := recorder.lastTarget(); got != job.ProgramTargetFlash {
+		t.Fatalf("flasher target = %q, want %q", got, job.ProgramTargetFlash)
 	}
 }
 
@@ -310,7 +452,7 @@ func TestManagerReflashMissingSourceJob(t *testing.T) {
 		t.Fatalf("Start() error: %v", err)
 	}
 
-	_, err := mgr.Reflash(context.Background(), "missing")
+	_, err := mgr.Reflash(context.Background(), "missing", job.ProgramTargetRAM)
 	if !errors.Is(err, ErrJobNotFound) {
 		t.Fatalf("Reflash() error = %v, want ErrJobNotFound", err)
 	}

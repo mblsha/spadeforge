@@ -25,6 +25,7 @@ type SubmitRequest struct {
 	Board         string
 	DesignName    string
 	BitstreamPath string
+	ProgramTarget job.ProgramTarget
 }
 
 type HTTPClient struct {
@@ -45,6 +46,9 @@ func (c *HTTPClient) SubmitFlash(ctx context.Context, req SubmitRequest) (string
 		return "", err
 	}
 	if err := mw.WriteField("design_name", req.DesignName); err != nil {
+		return "", err
+	}
+	if err := mw.WriteField("target", string(job.NormalizeProgramTarget(req.ProgramTarget))); err != nil {
 		return "", err
 	}
 
@@ -148,8 +152,17 @@ func (c *HTTPClient) ListJobs(ctx context.Context, limit int) ([]job.Record, err
 	return payload.Items, nil
 }
 
-func (c *HTTPClient) ReflashJob(ctx context.Context, sourceJobID string) (string, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.buildURL(path.Join("/v1/jobs", sourceJobID, "reflash")), nil)
+func (c *HTTPClient) ReflashJob(ctx context.Context, sourceJobID string, target job.ProgramTarget) (string, error) {
+	reqURL := c.buildURL(path.Join("/v1/jobs", sourceJobID, "reflash"))
+	parsed, err := url.Parse(reqURL)
+	if err != nil {
+		return "", err
+	}
+	q := parsed.Query()
+	q.Set("target", string(job.NormalizeProgramTarget(target)))
+	parsed.RawQuery = q.Encode()
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, parsed.String(), nil)
 	if err != nil {
 		return "", err
 	}

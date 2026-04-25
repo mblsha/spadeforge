@@ -43,6 +43,7 @@ func runFlash(args []string) error {
 	board := fs.String("board", "", "fpga board name (example: alchitry_au)")
 	designName := fs.String("name", "", "human-readable design name")
 	bitstream := fs.String("bitstream", "", "bitstream file path (.bit)")
+	target := fs.String("target", string(job.ProgramTargetRAM), "program target: ram or flash")
 
 	wait := fs.Bool("wait", true, "poll until flash reaches terminal state")
 	poll := fs.Duration("poll", 2*time.Second, "status polling interval")
@@ -60,6 +61,10 @@ func runFlash(args []string) error {
 	if strings.ToLower(filepath.Ext(strings.TrimSpace(*bitstream))) != ".bit" {
 		return fmt.Errorf("--bitstream must point to a .bit file")
 	}
+	programTarget, err := parseProgramTarget(*target)
+	if err != nil {
+		return err
+	}
 
 	resolvedServerURL, err := resolveServerURL(*serverURL, *discoverEnabled, *discoverTimeout, *discoverService, *discoverDomain)
 	if err != nil {
@@ -72,6 +77,7 @@ func runFlash(args []string) error {
 		Board:         strings.TrimSpace(*board),
 		DesignName:    strings.TrimSpace(*designName),
 		BitstreamPath: strings.TrimSpace(*bitstream),
+		ProgramTarget: programTarget,
 	})
 	if err != nil {
 		return err
@@ -142,6 +148,17 @@ func waitForTerminal(ctx context.Context, c *client.HTTPClient, jobID string, po
 	})
 }
 
+func parseProgramTarget(raw string) (job.ProgramTarget, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", string(job.ProgramTargetRAM):
+		return job.ProgramTargetRAM, nil
+	case string(job.ProgramTargetFlash):
+		return job.ProgramTargetFlash, nil
+	default:
+		return "", fmt.Errorf("--target must be ram or flash")
+	}
+}
+
 func waitForTerminalViaEvents(ctx context.Context, c *client.HTTPClient, jobID string, poll time.Duration) (*job.Record, error) {
 	var lastState string
 	var lastStep string
@@ -186,8 +203,8 @@ func waitForTerminalViaEvents(ctx context.Context, c *client.HTTPClient, jobID s
 
 func usage() {
 	_, _ = os.Stderr.WriteString("spadeloader-cli usage:\n")
-	_, _ = os.Stderr.WriteString("  spadeloader-cli --board <board> --name <design-name> --bitstream design.bit [--server http://host:8080]\n")
-	_, _ = os.Stderr.WriteString("  spadeloader-cli flash --board <board> --name <design-name> --bitstream design.bit [--server http://host:8080]\n")
+	_, _ = os.Stderr.WriteString("  spadeloader-cli --board <board> --name <design-name> --bitstream design.bit [--target ram|flash] [--server http://host:8080]\n")
+	_, _ = os.Stderr.WriteString("  spadeloader-cli flash --board <board> --name <design-name> --bitstream design.bit [--target ram|flash] [--server http://host:8080]\n")
 }
 
 func defaultString(v, fallback string) string {
