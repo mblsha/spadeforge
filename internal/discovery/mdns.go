@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -223,9 +224,7 @@ func copyIPs(in []net.IP) []net.IP {
 		if ip == nil {
 			continue
 		}
-		dup := make(net.IP, len(ip))
-		copy(dup, ip)
-		out = append(out, dup)
+		out = append(out, net.IP(bytes.Clone(ip)))
 	}
 	return out
 }

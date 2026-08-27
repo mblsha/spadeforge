@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -190,19 +192,13 @@ func (c Config) BoardAllowed(board string) bool {
 		return true
 	}
 	target := strings.TrimSpace(board)
-	for _, allowed := range c.AllowedBoards {
-		if strings.EqualFold(strings.TrimSpace(allowed), target) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(c.AllowedBoards, func(allowed string) bool {
+		return strings.EqualFold(strings.TrimSpace(allowed), target)
+	})
 }
 
 func getEnv(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return fallback
+	return cmp.Or(strings.TrimSpace(os.Getenv(key)), fallback)
 }
 
 func parseCSV(v string) []string {

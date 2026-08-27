@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -127,10 +128,8 @@ func tmuxCommandExited(session string) (bool, error) {
 	if len(lines) == 0 {
 		return false, fmt.Errorf("no panes reported for session %q", session)
 	}
-	for _, line := range lines {
-		if line == "0" {
-			return false, nil
-		}
+	if slices.Contains(lines, "0") {
+		return false, nil
 	}
 	return true, nil
 }

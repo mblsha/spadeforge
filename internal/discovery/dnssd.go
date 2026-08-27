@@ -398,16 +398,16 @@ func defaultDNSSDInstanceCandidates(service string) []string {
 
 func parseDNSSDLookupLine(line string) (dnssdLookupResult, bool) {
 	marker := " can be reached at "
-	idx := strings.Index(line, marker)
-	if idx < 0 {
+	_, after, ok := strings.Cut(line, marker)
+	if !ok {
 		return dnssdLookupResult{}, false
 	}
-	rest := strings.TrimSpace(line[idx+len(marker):])
+	rest := strings.TrimSpace(after)
 	interfaceIndex := 0
 	if ifaceStart := strings.Index(rest, "(interface "); ifaceStart >= 0 {
 		ifacePart := rest[ifaceStart+len("(interface "):]
-		if ifaceEnd := strings.IndexByte(ifacePart, ')'); ifaceEnd >= 0 {
-			if parsed, err := strconv.Atoi(strings.TrimSpace(ifacePart[:ifaceEnd])); err == nil && parsed > 0 {
+		if before, _, ok := strings.Cut(ifacePart, ")"); ok {
+			if parsed, err := strconv.Atoi(strings.TrimSpace(before)); err == nil && parsed > 0 {
 				interfaceIndex = parsed
 			}
 		}

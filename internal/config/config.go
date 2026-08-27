@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net"
@@ -186,10 +187,7 @@ func (c Config) AllowlistEnabled() bool {
 }
 
 func getEnv(k, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
-		return v
-	}
-	return fallback
+	return cmp.Or(strings.TrimSpace(os.Getenv(k)), fallback)
 }
 
 func parseCSV(v string) []string {

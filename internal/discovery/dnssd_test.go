@@ -34,7 +34,6 @@ func TestDefaultDNSSDInstanceCandidates(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.service, func(t *testing.T) {
 			t.Parallel()
 
@@ -99,7 +98,6 @@ func TestParseDNSSDAddressLine(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			got, ok := parseDNSSDAddressLine(tt.line)
@@ -221,7 +219,6 @@ func TestNormalizeBonjourHost(t *testing.T) {
 		{in: " plain-host ", want: "plain-host"},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.in, func(t *testing.T) {
 			t.Parallel()
 			if got := normalizeBonjourHost(tt.in); got != tt.want {

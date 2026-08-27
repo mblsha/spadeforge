@@ -22,7 +22,6 @@ func TestIsWildcardListenHost(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.host, func(t *testing.T) {
 			t.Parallel()
 			if got := isWildcardListenHost(tt.host); got != tt.want {
@@ -45,7 +44,6 @@ func TestIsDNSSDRegistrationActiveLine(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.line, func(t *testing.T) {
 			t.Parallel()
 			if got := isDNSSDRegistrationActiveLine(tt.line); got != tt.want {
@@ -69,7 +67,6 @@ func TestResolveListenHostIPs(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			ips, err := resolveListenHostIPs(tt.host)
@@ -124,7 +121,6 @@ func TestAddrsContainAnyIP(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			if got := addrsContainAnyIP(tt.addrs, targets); got != tt.want {
@@ -149,7 +145,6 @@ func TestIsTailscaleName(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			if got := isTailscaleName(tt.in); got != tt.want {
@@ -203,7 +198,6 @@ func TestIsLikelyUserspaceTunnel(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			if got := isLikelyUserspaceTunnel(tt.iface); got != tt.want {
@@ -258,7 +252,6 @@ func TestOnlyTailscaleIPv4(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			if got := onlyTailscaleIPv4(tt.addrs); got != tt.want {

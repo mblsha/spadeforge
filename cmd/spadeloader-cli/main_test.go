@@ -102,7 +102,6 @@ func TestPrimaryIPPortFromURL(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			if got := primaryIPPortFromURL(tt.rawURL); got != tt.want {
@@ -140,7 +139,6 @@ func TestParseProgramTarget(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := parseProgramTarget(tt.raw)

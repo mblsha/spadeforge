@@ -288,8 +288,8 @@ func (c *HTTPClient) StreamEvents(ctx context.Context, jobID string, since int64
 		if strings.HasPrefix(line, ":") {
 			continue
 		}
-		if strings.HasPrefix(line, "data:") {
-			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if after, ok := strings.CutPrefix(line, "data:"); ok {
+			data := strings.TrimSpace(after)
 			dataLines = append(dataLines, data)
 		}
 	}
