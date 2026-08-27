@@ -17,7 +17,7 @@ func TestAppendTrimsToLimit(t *testing.T) {
 	s := New(path, 100)
 	now := time.Now().UTC()
 
-	for i := 0; i < 101; i++ {
+	for i := range 101 {
 		err := s.Append(Item{
 			JobID:              fmt.Sprintf("job-%03d", i),
 			DesignName:         fmt.Sprintf("design-%03d", i),

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -68,10 +69,10 @@ func (a *API) checkAllowlist(r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	for _, allow := range a.cfg.Allowlist {
-		if allowEntryMatches(allow, ip) {
-			return nil
-		}
+	if slices.ContainsFunc(a.cfg.Allowlist, func(allow string) bool {
+		return allowEntryMatches(allow, ip)
+	}) {
+		return nil
 	}
 	return fmt.Errorf("remote ip %s is not allowed", ip.String())
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -109,7 +110,7 @@ func (s *Store) loadLocked() error {
 	if payload.Version == 0 {
 		payload.Version = currentVersion
 	}
-	s.items = append([]Item(nil), payload.Items...)
+	s.items = slices.Clone(payload.Items)
 	if len(s.items) > s.limit {
 		s.items = s.items[:s.limit]
 	}

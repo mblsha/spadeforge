@@ -477,7 +477,7 @@ func TestManagerPrunesTerminalJobsByHistoryLimit(t *testing.T) {
 	}
 
 	var submitted []string
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		rec, err := mgr.Submit(context.Background(), SubmitRequest{
 			Board:         "alchitry_au",
 			DesignName:    "design-" + string(rune('A'+i)),

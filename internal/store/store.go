@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"sync"
 
 	"github.com/mblsha/spadeforge/internal/config"
@@ -107,8 +107,8 @@ func (s *Store) LoadAll() ([]*job.Record, error) {
 		}
 		records = append(records, rec)
 	}
-	sort.Slice(records, func(i, j int) bool {
-		return records[i].CreatedAt.Before(records[j].CreatedAt)
+	slices.SortFunc(records, func(a, b *job.Record) int {
+		return a.CreatedAt.Compare(b.CreatedAt)
 	})
 	return records, nil
 }

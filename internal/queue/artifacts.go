@@ -1,12 +1,13 @@
 package queue
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -200,8 +201,8 @@ func collectArtifactFiles(artDir string) ([]artifactFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
+	slices.SortFunc(files, func(a, b artifactFile) int {
+		return cmp.Compare(a.Path, b.Path)
 	})
 	return files, nil
 }

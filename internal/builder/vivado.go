@@ -276,11 +276,11 @@ func (w *stepProgressWriter) handleLine(line string) {
 
 func parseStepLine(line string) (string, bool) {
 	const marker = "SPADEFORGE_STEP:"
-	idx := strings.Index(line, marker)
-	if idx < 0 {
+	_, after, ok := strings.Cut(line, marker)
+	if !ok {
 		return "", false
 	}
-	step := strings.TrimSpace(line[idx+len(marker):])
+	step := strings.TrimSpace(after)
 	if step == "" {
 		return "", false
 	}

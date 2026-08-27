@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"cmp"
 	"context"
 	crand "crypto/rand"
 	"encoding/hex"
@@ -9,7 +10,7 @@ import (
 	"io"
 	"log"
 	"os"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -151,11 +152,11 @@ func (m *Manager) ListJobs(limit int) []job.Record {
 		normalizeRecordTarget(&copyRec)
 		out = append(out, copyRec)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
-			return out[i].ID > out[j].ID
+	slices.SortFunc(out, func(a, b job.Record) int {
+		if byCreatedAt := b.CreatedAt.Compare(a.CreatedAt); byCreatedAt != 0 {
+			return byCreatedAt
 		}
-		return out[i].CreatedAt.After(out[j].CreatedAt)
+		return cmp.Compare(b.ID, a.ID)
 	})
 	if limit <= 0 || limit > len(out) {
 		limit = len(out)
@@ -529,11 +530,11 @@ func (m *Manager) pruneTerminalJobsLocked() []string {
 		return nil
 	}
 
-	sort.Slice(terminal, func(i, j int) bool {
-		if terminal[i].createdAt.Equal(terminal[j].createdAt) {
-			return terminal[i].id > terminal[j].id
+	slices.SortFunc(terminal, func(a, b terminalJobRef) int {
+		if byCreatedAt := b.createdAt.Compare(a.createdAt); byCreatedAt != 0 {
+			return byCreatedAt
 		}
-		return terminal[i].createdAt.After(terminal[j].createdAt)
+		return cmp.Compare(b.id, a.id)
 	})
 
 	pruneIDs := make([]string, 0, len(terminal)-limit)

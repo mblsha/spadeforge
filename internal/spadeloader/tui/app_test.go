@@ -145,7 +145,7 @@ func TestAddEventTrimsToMaxLines(t *testing.T) {
 		t.Fatalf("newModel() error: %v", err)
 	}
 
-	for i := 0; i < maxEventLines+5; i++ {
+	for range maxEventLines + 5 {
 		m.addEvent("event")
 	}
 	if len(m.eventLines) != maxEventLines {

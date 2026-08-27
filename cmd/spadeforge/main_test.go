@@ -19,7 +19,6 @@ func TestParseListenHostPort(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			host, port, err := parseListenHostPort(tt.listen)
@@ -61,7 +60,6 @@ func TestIsLoopbackListenHost(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.host, func(t *testing.T) {
 			t.Parallel()
 			if got := isLoopbackListenHost(tt.host); got != tt.want {

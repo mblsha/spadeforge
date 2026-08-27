@@ -1,10 +1,11 @@
 package tui
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -244,12 +245,12 @@ func (m model) View() string {
 }
 
 func (m *model) applyJobs(items []job.Record) {
-	sorted := append([]job.Record(nil), items...)
-	sort.Slice(sorted, func(i, j int) bool {
-		if sorted[i].CreatedAt.Equal(sorted[j].CreatedAt) {
-			return sorted[i].ID > sorted[j].ID
+	sorted := slices.Clone(items)
+	slices.SortFunc(sorted, func(a, b job.Record) int {
+		if byCreatedAt := b.CreatedAt.Compare(a.CreatedAt); byCreatedAt != 0 {
+			return byCreatedAt
 		}
-		return sorted[i].CreatedAt.After(sorted[j].CreatedAt)
+		return cmp.Compare(b.ID, a.ID)
 	})
 	unique := make([]job.Record, 0, len(sorted))
 	seen := make(map[string]struct{}, len(sorted))
@@ -276,12 +277,12 @@ func (m *model) applyJobs(items []job.Record) {
 	m.pendingID = ""
 
 	if strings.TrimSpace(targetID) != "" {
-		for i := range m.items {
-			if m.items[i].ID == targetID {
-				m.selectedIdx = i
-				m.selectedID = targetID
-				return
-			}
+		if i := slices.IndexFunc(m.items, func(rec job.Record) bool {
+			return rec.ID == targetID
+		}); i >= 0 {
+			m.selectedIdx = i
+			m.selectedID = targetID
+			return
 		}
 	}
 	m.selectedIdx = 0
@@ -292,10 +293,7 @@ func (m *model) moveSelection(delta int) {
 	if len(m.items) == 0 || delta == 0 {
 		return
 	}
-	next := m.selectedIdx + delta
-	if next < 0 {
-		next = 0
-	}
+	next := max(m.selectedIdx+delta, 0)
 	if next >= len(m.items) {
 		next = len(m.items) - 1
 	}
@@ -327,10 +325,7 @@ func (m model) visibleRows() rowWindow {
 	if m.selectedIdx >= maxRows {
 		start = m.selectedIdx - maxRows + 1
 	}
-	end := start + maxRows
-	if end > len(m.items) {
-		end = len(m.items)
-	}
+	end := min(start+maxRows, len(m.items))
 	return rowWindow{start: start, end: end}
 }
 
@@ -396,14 +391,7 @@ func (m model) eventRowsLimit() int {
 		return maxEventLines
 	}
 	minListRows := 5
-	available := m.height - 6 - minListRows
-	if available < 0 {
-		available = 0
-	}
-	if available > maxEventLines {
-		available = maxEventLines
-	}
-	return available
+	return min(max(m.height-6-minListRows, 0), maxEventLines)
 }
 
 func (m model) writeEventSection(b *strings.Builder) {
@@ -421,10 +409,7 @@ func (m model) writeEventSection(b *strings.Builder) {
 		b.WriteByte('\n')
 		return
 	}
-	start := len(m.eventLines) - rows
-	if start < 0 {
-		start = 0
-	}
+	start := max(len(m.eventLines)-rows, 0)
 	for i := start; i < len(m.eventLines); i++ {
 		b.WriteString(trimToWidth(m.eventLines[i], m.width))
 		b.WriteByte('\n')
